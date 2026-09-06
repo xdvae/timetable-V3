@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Faculty{% endblock %}
+{% block content %}
+<h3 class="mb-3">Faculty</h3>
+<div class="row">
+  <div class="col-md-4">
+    <div class="card p-3">
+      <h6>Add faculty</h6>
+      <form method="post">
+        <div class="mb-2">
+          <label class="form-label">Name</label>
+          <input class="form-control" name="name" required>
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Department</label>
+          <input class="form-control" name="department">
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Type</label>
+          <select class="form-select" name="faculty_type">
+            <option value="regular">Regular</option>
+            <option value="inter-department">Inter-department</option>
+            <option value="visiting">Visiting</option>
+          </select>
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Weekly max hours</label>
+          <input type="number" class="form-control" name="weekly_max_hours" value="24">
+        </div>
+        <button class="btn btn-primary w-100">Add Faculty</button>
+      </form>
+    </div>
+  </div>
+  <div class="col-md-8">
+    <div class="card p-3">
+      <table class="table table-sm table-hover">
+        <thead><tr><th>Name</th><th>Dept</th><th>Type</th><th>Weekly Load</th><th></th></tr></thead>
+        <tbody>
+        {% for f in faculty %}
+          <tr>
+            <td>{{ f.name }}</td>
+            <td>{{ f.department }}</td>
+            <td>{{ f.faculty_type }}</td>
+            <td>
+              {% set load = faculty_load.get(f.id, 0) %}
+              <span class="badge {% if f.weekly_max_hours and load > f.weekly_max_hours %}bg-danger{% else %}bg-secondary{% endif %}">
+                {{ load }}{% if f.weekly_max_hours %} / {{ f.weekly_max_hours }}{% endif %} hrs
+              </span>
+            </td>
+            <td>
+              <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('faculty_availability', fid=f.id) }}">Availability</a>
+              <form method="post" action="{{ url_for('delete_faculty', fid=f.id) }}" class="d-inline" onsubmit="return confirm('Delete this faculty?');">
+                <button class="btn btn-sm btn-outline-danger">Delete</button>
+              </form>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="5" class="text-muted">No faculty yet.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

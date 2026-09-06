@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Timetable{% endblock %}
+{% block content %}
+<h1 class="mb-1">Timetable</h1>
+<p class="text-muted mb-4">Generate the schedule, then look it up by section, faculty member, or room.</p>
+
+<div class="panel accent-brass d-flex justify-content-between align-items-center flex-wrap gap-3">
+  <div>
+    <h2 style="font-size:1.05rem;" class="mb-1">Generate the timetable</h2>
+    <p class="text-muted mb-0">Runs the scheduler against everything currently entered. Usually takes a few seconds to under a minute.</p>
+  </div>
+  <form method="post" action="{{ url_for('run_schedule') }}">
+    <button class="btn btn-primary btn-lg">Generate Timetable</button>
+  </form>
+</div>
+{% if has_schedule %}<p class="text-success mb-4"><i class="bi bi-check-circle-fill"></i> A timetable has been generated — pick a view below.</p>{% else %}<div class="mb-4"></div>{% endif %}
+
+<a href="{{ url_for('free_faculty_view') }}" class="panel plain d-flex align-items-center gap-3 text-decoration-none mb-4" style="max-width:520px;">
+  <i class="bi bi-person-check flex-shrink-0" style="font-size:1.4rem;color:var(--sage);width:1.4rem;"></i>
+  <div>
+    <div class="fw-semibold" style="color:var(--ink);">Who's free when</div>
+    <div class="text-muted small">See every faculty member's status hour-by-hour for a chosen day.</div>
+  </div>
+</a>
+
+<div class="row">
+  <div class="col-md-4">
+    <div class="panel accent-steel">
+      <h2 style="font-size:1rem;" class="mb-3">By Section</h2>
+      <div class="d-flex flex-wrap gap-2">
+      {% for s in sections %}
+        <a class="labgroup-pill text-decoration-none" style="color:var(--ink);" href="{{ url_for('timetable_view', view='section', obj_id=s.id) }}">{{ s.name }}</a>
+      {% else %}
+        <span class="text-muted">No sections yet.</span>
+      {% endfor %}
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="panel accent-steel">
+      <h2 style="font-size:1rem;" class="mb-3">By Faculty</h2>
+      <div class="d-flex flex-wrap gap-2">
+      {% for f in faculty %}
+        <a class="labgroup-pill text-decoration-none" style="color:var(--ink);" href="{{ url_for('timetable_view', view='faculty', obj_id=f.id) }}">{{ f.name }}</a>
+      {% else %}
+        <span class="text-muted">No faculty yet.</span>
+      {% endfor %}
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="panel accent-steel">
+      <h2 style="font-size:1rem;" class="mb-3">By Room</h2>
+      <div class="d-flex flex-wrap gap-2">
+      {% for r in rooms %}
+        <a class="labgroup-pill text-decoration-none" style="color:var(--ink);" href="{{ url_for('timetable_view', view='room', obj_id=r.id) }}">Room {{ r.name }}</a>
+      {% else %}
+        <span class="text-muted">No rooms yet.</span>
+      {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

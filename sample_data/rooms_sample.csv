@@ -1,0 +1,13 @@
+name,room_type,capacity,equipment_count
+101,theory,150,
+102,theory,120,
+201,theory,80,
+202,theory,80,
+203,theory,80,
+301 A,theory,70,
+302 A,theory,70,
+401 A,lab,35,35
+401 B,lab,35,35
+402,lab,40,40
+403,lab,30,30
+404,lab,35,35

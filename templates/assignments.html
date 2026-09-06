@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}Teaching Assignments{% endblock %}
+{% block content %}
+<h3 class="mb-3">Teaching Assignments</h3>
+<p class="text-muted">Who teaches what, to which section (theory) or lab group (practical), and how many hours/week. Picking a subject auto-fills its usual hours — still fully editable.</p>
+<div class="row">
+  <div class="col-md-5">
+    <div class="card p-3">
+      <h6>Add assignment</h6>
+      <form method="post" id="assignForm">
+        <div class="mb-2">
+          <label class="form-label">Faculty</label>
+          <select class="form-select" name="faculty_id" required>
+            {% for f in faculty %}
+              <option value="{{ f.id }}">{{ f.name }} — {{ faculty_load.get(f.id, 0) }} hrs/wk currently{% if f.weekly_max_hours %} (max {{ f.weekly_max_hours }}){% endif %}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Subject</label>
+          <select class="form-select" name="subject_id" id="subject_id" required onchange="applyDefaults()">
+            {% for s in subjects %}<option value="{{ s.id }}">{{ s.name }} ({{ s.enrollment.program.name }} {{ s.enrollment.year_label }})</option>{% endfor %}
+          </select>
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Session type</label>
+          <select class="form-select" name="session_type" id="session_type" required onchange="toggleGroup(); applyDefaults();">
+            <option value="theory">Theory</option>
+            <option value="practical">Practical (Lab)</option>
+          </select>
+        </div>
+        <div class="mb-2" id="section_field">
+          <label class="form-label">Section</label>
+          <select class="form-select" name="section_id">
+            {% for s in sections %}<option value="{{ s.id }}">{{ s.name }} ({{ s.student_count }})</option>{% endfor %}
+          </select>
+        </div>
+        <div class="mb-2 d-none" id="labgroup_field">
+          <label class="form-label">Lab Group</label>
+          <select class="form-select" name="lab_group_id">
+            {% for lg in lab_groups %}<option value="{{ lg.id }}">{{ lg.name }} ({{ lg.student_count }})</option>{% endfor %}
+          </select>
+        </div>
+        <div class="row">
+          <div class="col mb-2">
+            <label class="form-label">Hours/week</label>
+            <input type="number" min="1" class="form-control" id="periods_per_week" name="periods_per_week" value="3" required>
+          </div>
+          <div class="col mb-2">
+            <label class="form-label">Block length (hrs/session)</label>
+            <input type="number" min="1" class="form-control" id="block_length" name="block_length" value="1" required>
+            <div class="form-text">1 = one-hour theory class. Labs default to a 2-hr block — set to 1 to split a lab into two 1-hr sessions instead.</div>
+          </div>
+        </div>
+        <button class="btn btn-primary w-100">Add Assignment</button>
+      </form>
+    </div>
+  </div>
+  <div class="col-md-7">
+    <div class="card p-3">
+      <table class="table table-sm table-hover">
+        <thead><tr><th>Faculty</th><th>Subject</th><th>Type</th><th>Group</th><th>Hrs/wk</th><th>Block</th><th></th></tr></thead>
+        <tbody>
+        {% for a in assignments %}
+          <tr>
+            <td>{{ a.faculty.name }}</td>
+            <td>{{ a.subject.name }}</td>
+            <td>{% if a.session_type == 'theory' %}<span class="badge bg-primary">Theory</span>{% else %}<span class="badge bg-success">Lab</span>{% endif %}</td>
+            <td>{{ a.group_label() }}</td>
+            <td>{{ a.periods_per_week }}</td>
+            <td>{{ a.block_length }}h</td>
+            <td>
+              <form method="post" action="{{ url_for('delete_assignment', aid=a.id) }}" onsubmit="return confirm('Delete this assignment?');">
+                <button class="btn btn-sm btn-outline-danger">Delete</button>
+              </form>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="7" class="text-muted">No assignments yet.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+<script>
+const subjectDefaults = {{ subjects_json | tojson }};
+function toggleGroup(){
+  const t = document.getElementById('session_type').value;
+  document.getElementById('section_field').classList.toggle('d-none', t !== 'theory');
+  document.getElementById('labgroup_field').classList.toggle('d-none', t !== 'practical');
+}
+function applyDefaults(){
+  const subjId = document.getElementById('subject_id').value;
+  const type = document.getElementById('session_type').value;
+  const d = subjectDefaults[subjId];
+  if (!d) return;
+  if (type === 'theory' && d.theory) {
+    document.getElementById('periods_per_week').value = d.theory;
+    document.getElementById('block_length').value = 1;
+  } else if (type === 'practical' && d.practical) {
+    document.getElementById('periods_per_week').value = d.practical;
+    document.getElementById('block_length').value = d.block || 2;
+  }
+}
+toggleGroup();
+</script>
+{% endblock %}

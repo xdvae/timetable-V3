@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Rooms{% endblock %}
+{% block content %}
+<h3 class="mb-3">Rooms &amp; Labs</h3>
+<div class="row">
+  <div class="col-md-4">
+    <div class="card p-3">
+      <h6>Add room</h6>
+      <form method="post">
+        <div class="mb-2">
+          <label class="form-label">Room Number</label>
+          <input class="form-control" name="name" required placeholder="e.g. 503 B or 301">
+          <div class="form-text">Only a room number with an optional single block letter is accepted (e.g. <code>503 B</code>, <code>B503</code>, <code>301</code>) — they all normalize to one fixed form, so the same room can never be entered twice under different spellings.</div>
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Type</label>
+          <select class="form-select" name="room_type" required>
+            <option value="theory">Theory Room</option>
+            <option value="lab">Lab</option>
+          </select>
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Capacity</label>
+          <input type="number" class="form-control" name="capacity" required>
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Equipment count (labs only, optional)</label>
+          <input type="number" class="form-control" name="equipment_count" placeholder="e.g. number of computers">
+        </div>
+        <button class="btn btn-primary w-100">Add Room</button>
+      </form>
+    </div>
+  </div>
+  <div class="col-md-8">
+    <div class="card p-3">
+      <table class="table table-sm table-hover">
+        <thead><tr><th>Name</th><th>Type</th><th>Capacity</th><th>Equipment</th><th></th></tr></thead>
+        <tbody>
+        {% for r in rooms %}
+          <tr>
+            <td>{{ r.name }}</td>
+            <td>{{ r.room_type }}</td>
+            <td>{{ r.capacity }}</td>
+            <td>{{ r.equipment_count or '—' }}</td>
+            <td>
+              <form method="post" action="{{ url_for('delete_room', room_id=r.id) }}" onsubmit="return confirm('Delete this room?');">
+                <button class="btn btn-sm btn-outline-danger">Delete</button>
+              </form>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="5" class="text-muted">No rooms yet.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Subjects{% endblock %}
+{% block content %}
+<h3 class="mb-3">Subjects</h3>
+<div class="row">
+  <div class="col-md-4">
+    <div class="card p-3">
+      <h6>Add subject</h6>
+      <form method="post">
+        <div class="mb-2">
+          <label class="form-label">Enrollment (program + year)</label>
+          <select class="form-select" name="enrollment_id" required>
+            {% for e in enrollments %}
+              <option value="{{ e.id }}">{{ e.program.name }} — {{ e.year_label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Code</label>
+          <input class="form-control" name="code" placeholder="e.g. CS201">
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Name</label>
+          <input class="form-control" name="name" required placeholder="e.g. Data Structures">
+        </div>
+        <div class="row">
+          <div class="col mb-2">
+            <label class="form-label">Theory hrs/week</label>
+            <input type="number" min="0" class="form-control" name="theory_hours_per_week" placeholder="e.g. 3">
+          </div>
+          <div class="col mb-2">
+            <label class="form-label">Practical hrs/week</label>
+            <input type="number" min="0" class="form-control" name="practical_hours_per_week" placeholder="e.g. 4">
+          </div>
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Lab block length (hrs per session)</label>
+          <input type="number" min="1" class="form-control" name="practical_block_length" value="2">
+          <div class="form-text">Labs default to one 2-hour block. Set to 1 to split into separate 1-hour sessions instead.</div>
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Credits (optional)</label>
+          <input type="number" class="form-control" name="credits" placeholder="e.g. 3">
+        </div>
+        <button class="btn btn-primary w-100">Add Subject</button>
+      </form>
+      {% if not enrollments %}<p class="text-danger mt-2">Add an Enrollment first.</p>{% endif %}
+    </div>
+  </div>
+  <div class="col-md-8">
+    <div class="card p-3">
+      <table class="table table-sm table-hover">
+        <thead><tr><th>Code</th><th>Name</th><th>Program/Year</th><th>Theory hrs/wk</th><th>Practical hrs/wk</th><th>Lab block</th><th></th></tr></thead>
+        <tbody>
+        {% for s in subjects %}
+          <tr>
+            <td>{{ s.code }}</td>
+            <td>{{ s.name }}</td>
+            <td>{{ s.enrollment.program.name }} — {{ s.enrollment.year_label }}</td>
+            <td>{% if s.theory_hours_per_week %}<span class="badge bg-primary">{{ s.theory_hours_per_week }} hrs</span>{% else %}—{% endif %}</td>
+            <td>{% if s.practical_hours_per_week %}<span class="badge bg-success">{{ s.practical_hours_per_week }} hrs</span>{% else %}—{% endif %}</td>
+            <td>{{ s.practical_block_length }}h blocks</td>
+            <td>
+              <form method="post" action="{{ url_for('delete_subject', sid=s.id) }}" onsubmit="return confirm('Delete this subject?');">
+                <button class="btn btn-sm btn-outline-danger">Delete</button>
+              </form>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="7" class="text-muted">No subjects yet.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

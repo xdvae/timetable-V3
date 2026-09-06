@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Overview{% endblock %}
+{% block content %}
+<h1 class="mb-1">Overview</h1>
+<p class="text-muted mb-4">Sections and lab groups at a glance, and who's teaching what.</p>
+
+<ul class="nav nav-tabs mb-3" id="ovTabs">
+  <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-sections">Sections &amp; Groups</button></li>
+  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-faculty">Faculty Workload</button></li>
+</ul>
+
+<div class="tab-content">
+  <div class="tab-pane fade show active" id="tab-sections">
+    {% for e in enrollments %}
+      <div class="panel accent-steel">
+        <h2 style="font-size:1.05rem;" class="mb-3"><span class="badge" style="background:var(--ink);">{{ e.program.name }}</span> {{ e.year_label }} <span class="text-muted">— {{ e.total_students }} students</span></h2>
+        <div class="row row-cols-1 row-cols-md-3 g-3">
+        {% for s in sections_by_enrollment[e.id] %}
+          <div class="col">
+            <div class="section-card">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <strong>{{ s.name }}</strong>
+                <span class="badge" style="background:var(--brass);color:#241A0C;">{{ s.student_count }} students</span>
+              </div>
+              {% for lg in lab_groups_by_section[s.id] %}
+                <div class="labgroup-pill">{{ lg.name }} <span class="text-muted">— {{ lg.student_count }}</span></div>
+              {% endfor %}
+            </div>
+          </div>
+        {% endfor %}
+        </div>
+      </div>
+    {% else %}
+      <p class="text-muted">No enrollments yet.</p>
+    {% endfor %}
+  </div>
+
+  <div class="tab-pane fade" id="tab-faculty">
+    <div class="row row-cols-1 row-cols-md-2 g-3">
+    {% for f in faculty %}
+      <div class="col">
+        <div class="panel plain h-100 mb-0">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <h2 style="font-size:1rem;" class="mb-0">{{ f.name }} <span class="text-muted small fw-normal">({{ f.faculty_type }})</span></h2>
+            {% set load = faculty_load.get(f.id, 0) %}
+            <span class="badge {% if f.weekly_max_hours and load > f.weekly_max_hours %}bg-danger{% else %}bg-secondary{% endif %}">
+              {{ load }}{% if f.weekly_max_hours %}/{{ f.weekly_max_hours }}{% endif %} hrs/wk
+            </span>
+          </div>
+          <ul class="list-group list-group-flush">
+          {% for a in assignments_by_faculty[f.id] %}
+            <li class="list-group-item d-flex justify-content-between align-items-center px-0">
+              <span>
+                {% if a.session_type == 'theory' %}<span class="badge bg-primary me-1">Th</span>{% else %}<span class="badge bg-success me-1">Lab</span>{% endif %}
+                {{ a.subject.name }} <span class="text-muted">— {{ a.group_label() }}</span>
+              </span>
+              <span class="text-muted small">{{ a.periods_per_week }} hrs/wk</span>
+            </li>
+          {% else %}
+            <li class="list-group-item px-0 text-muted">No assignments yet.</li>
+          {% endfor %}
+          </ul>
+        </div>
+      </div>
+    {% else %}
+      <p class="text-muted">No faculty yet.</p>
+    {% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,47 @@
+program,year_label,section,total_students,faculty_name,faculty_type,subject_code,subject_name,session_type,credits,periods_per_week,block_length
+BCA,1st Year,BCA-1-A,60,Dr. Ayesha Khan,regular,BCA101,Programming in C,theory,3,3,1
+BCA,1st Year,BCA-1-A,60,Dr. Ayesha Khan,regular,BCA101L,Programming in C Lab,practical,1,2,2
+BCA,1st Year,BCA-1-A,60,Dr. Karan Mehta,regular,BCA102,Mathematics I,theory,3,3,1
+BCA,1st Year,BCA-1-A,60,Mr. Rohan Verma,regular,BCA103,Digital Electronics,theory,3,3,1
+BCA,1st Year,BCA-1-A,60,Ms. Priya Nair,regular,BCA104,Communication Skills,theory,3,2,1
+BCA,1st Year,BCA-1-A,60,Ms. Kavya Reddy,regular,BCA105,Environmental Studies,theory,3,2,1
+BCA,1st Year,BCA-1-A,60,Ms. Simran Kaur,regular,BCA106,Web Designing,theory,3,2,1
+BCA,1st Year,BCA-1-A,60,Ms. Simran Kaur,regular,BCA106L,Web Designing Lab,practical,1,2,2
+BCA,1st Year,BCA-1-A,60,Mr. Nikhil Sharma,regular,BCA107,Computer Fundamentals & Office Automation,theory,3,3,1
+BCA,1st Year,BCA-1-A,60,Ms. Ritika Chawla,regular,BCA108,Financial Accounting,theory,3,3,1
+BCA,1st Year,BCA-1-A,60,Mr. Sanjay Kulkarni,regular,BCA109L,IT Workshop,practical,1,2,2
+BSc IT,1st Year,BSCIT-1-A,50,Ms. Ananya Iyer,regular,BIT101,Programming Fundamentals (Python),theory,3,3,1
+BSc IT,1st Year,BSCIT-1-A,50,Ms. Ananya Iyer,regular,BIT101L,Programming Fundamentals Lab,practical,1,2,2
+BSc IT,1st Year,BSCIT-1-A,50,Dr. Karan Mehta,regular,BIT102,Discrete Mathematics,theory,3,3,1
+BSc IT,1st Year,BSCIT-1-A,50,Mr. Rohan Verma,regular,BIT103,Digital Logic,theory,3,3,1
+BSc IT,1st Year,BSCIT-1-A,50,Mr. Vikram Singh,regular,BIT104,Data Communication & Networking,theory,3,3,1
+BSc IT,1st Year,BSCIT-1-A,50,Ms. Priya Nair,regular,BIT105,English Communication,theory,3,2,1
+BSc IT,1st Year,BSCIT-1-A,50,Dr. Meera Joshi,regular,BIT106,Statistical Methods,theory,3,3,1
+BSc IT,1st Year,BSCIT-1-A,50,Ms. Divya Menon,regular,BIT107,Web Technologies,theory,3,2,1
+BSc IT,1st Year,BSCIT-1-A,50,Ms. Divya Menon,regular,BIT107L,Web Technologies Lab,practical,1,2,2
+BSc IT,1st Year,BSCIT-1-A,50,Mr. Siddharth Malhotra,regular,BIT108,Operating Systems Basics,theory,3,3,1
+BSc IT,1st Year,BSCIT-1-A,50,Mr. Farhan Ali,visiting,BIT109L,IT Tools Lab,practical,1,2,2
+BCS,2nd Year,BCS-2-A,55,Mr. Rohan Verma,regular,BCS201,Data Structures,theory,3,3,1
+BCS,2nd Year,BCS-2-A,55,Mr. Rahul Bhatt,visiting,BCS201L,Data Structures Lab,practical,1,2,2
+BCS,2nd Year,BCS-2-A,55,Dr. Neha Gupta,regular,BCS202,Database Management Systems,theory,3,3,1
+BCS,2nd Year,BCS-2-A,55,Dr. Neha Gupta,regular,BCS202L,DBMS Lab,practical,1,2,2
+BCS,2nd Year,BCS-2-A,55,Mr. Vikram Singh,regular,BCS203,Computer Networks,theory,3,3,1
+BCS,2nd Year,BCS-2-A,55,Ms. Ananya Iyer,regular,BCS204,Object Oriented Programming (Java),theory,3,3,1
+BCS,2nd Year,BCS-2-A,55,Ms. Ananya Iyer,regular,BCS204L,OOP Java Lab,practical,1,2,2
+BCS,2nd Year,BCS-2-A,55,Dr. Karan Mehta,regular,BCS205,Discrete Structures,theory,3,3,1
+BCS,2nd Year,BCS-2-A,55,Dr. Pooja Agarwal,regular,BCS206,Software Engineering,theory,3,2,1
+BCS,2nd Year,BCS-2-A,55,Mr. Siddharth Malhotra,regular,BCS207,Operating Systems,theory,3,3,1
+BCS,2nd Year,BCS-2-A,55,Dr. Meera Joshi,regular,BCS208,Numerical Methods,theory,3,2,1
+BCS,2nd Year,BCS-2-A,55,Ms. Priya Nair,regular,BCS209,Technical Writing,theory,3,2,1
+Btech CSE,2nd Year,CSE-2-A,65,Mr. Aditya Rao,regular,CSE201,Data Structures,theory,3,3,1
+Btech CSE,2nd Year,CSE-2-A,65,Mr. Aditya Rao,regular,CSE201L,Data Structures Lab,practical,1,2,2
+Btech CSE,2nd Year,CSE-2-A,65,Mr. Vikram Singh,regular,CSE202,Computer Organization & Architecture,theory,3,3,1
+Btech CSE,2nd Year,CSE-2-A,65,Dr. Karan Mehta,regular,CSE203,Discrete Mathematics,theory,3,3,1
+Btech CSE,2nd Year,CSE-2-A,65,Ms. Ananya Iyer,regular,CSE204,Object Oriented Programming,theory,3,3,1
+Btech CSE,2nd Year,CSE-2-A,65,Mr. Rahul Bhatt,visiting,CSE204L,OOP Lab,practical,1,2,2
+Btech CSE,2nd Year,CSE-2-A,65,Ms. Kavya Reddy,regular,CSE205,Environmental Science,theory,3,2,1
+Btech CSE,2nd Year,CSE-2-A,65,Mr. Rohan Verma,regular,CSE206,Digital Logic Design,theory,3,3,1
+Btech CSE,2nd Year,CSE-2-A,65,Dr. Meera Joshi,regular,CSE207,Engineering Mathematics II,theory,3,3,1
+Btech CSE,2nd Year,CSE-2-A,65,Ms. Priya Nair,regular,CSE208,Professional Communication,theory,3,2,1
+Btech CSE,2nd Year,CSE-2-A,65,Ms. Ananya Iyer,regular,CSE209,Python Programming,theory,3,2,1
+Btech CSE,2nd Year,CSE-2-A,65,Ms. Ananya Iyer,regular,CSE209L,Python Programming Lab,practical,1,2,2
