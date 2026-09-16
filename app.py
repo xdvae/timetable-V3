@@ -137,7 +137,9 @@ def change_password():
 @app.before_request
 def require_login():
     """Every route requires login except the login page and static files."""
-    allowed = {"login", "static"}
+    # "api.api_login" is the JSON login endpoint (see api_routes.py): it must
+    # stay reachable without a session, otherwise React could never sign in.
+    allowed = {"login", "static", "api.api_login"}
     if request.endpoint not in allowed and not current_user.is_authenticated:
         return login_manager.unauthorized()
 
@@ -695,6 +697,13 @@ def free_faculty_view():
     return render_template("free_faculty.html", days=days, periods=periods, faculty=faculty,
                             selected_day=selected_day, busy=busy,
                             break_after=cfg.break_after_periods)
+
+
+# ------------------------------------------------------------------ api layer
+# Additive JSON connectivity for the React frontend (see api_routes.py).
+# Registers /api/* routes only; every Jinja route above is unchanged.
+from api_routes import init_api
+init_api(app, login_manager)
 
 
 if __name__ == "__main__":
