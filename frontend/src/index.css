@@ -1,111 +1,147 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/*
+ * UniSchedule design tokens.
+ * Carries over the existing application's visual language (ink / brass /
+ * steel / sage / signal) into shadcn-compatible CSS variables + Tailwind v4
+ * theme mappings. Light theme only, matching the current product.
+ */
 :root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+  --radius: 0.5rem;
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
+  /* shadcn surface tokens */
+  --background: #f3f5f8;
+  --foreground: #16233f;
+  --card: #ffffff;
+  --card-foreground: #16233f;
+  --popover: #ffffff;
+  --popover-foreground: #16233f;
+  --primary: #b8873a;
+  --primary-foreground: #241a0c;
+  --secondary: #e9edf3;
+  --secondary-foreground: #16233f;
+  --muted: #e9edf3;
+  --muted-foreground: #4a5876;
+  --accent: #e7eef5;
+  --accent-foreground: #16233f;
+  --destructive: #a6423a;
+  --destructive-foreground: #ffffff;
+  --border: #dfe4ed;
+  --input: #dfe4ed;
+  --ring: #b8873a;
 
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
-  color-scheme: light dark;
-  color: var(--text);
-  background: var(--bg);
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  /* UniSchedule domain tokens */
+  --ink: #16233f;
+  --ink-soft: #4a5876;
+  --paper: #f3f5f8;
+  --panel: #ffffff;
+  --line: #dfe4ed;
+  --brass: #b8873a;
+  --brass-dark: #96692a;
+  --steel: #3e6b96;
+  --steel-tint: #e7eef5;
+  --sage: #4b7b62;
+  --sage-tint: #e7f1ec;
+  --signal: #a6423a;
+  --signal-tint: #f7e9e7;
+  --free: #e7f1ec;
+  --free-ink: #2e5b44;
+}
 
-  @media (max-width: 1024px) {
-    font-size: 16px;
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* domain colors as utilities: bg-steel, text-sage, … */
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-paper: var(--paper);
+  --color-panel: var(--panel);
+  --color-line: var(--line);
+  --color-brass: var(--brass);
+  --color-brass-dark: var(--brass-dark);
+  --color-steel: var(--steel);
+  --color-steel-tint: var(--steel-tint);
+  --color-sage: var(--sage);
+  --color-sage-tint: var(--sage-tint);
+  --color-signal: var(--signal);
+  --color-signal-tint: var(--signal-tint);
+  --color-free: var(--free);
+  --color-free-ink: var(--free-ink);
+
+  --font-sans: "Inter", -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Source Serif 4", Georgia, serif;
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-size: 0.93rem;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+    letter-spacing: -0.01em;
   }
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
+/*
+ * Timetable cell semantics (theory = steel, practical/lab = sage).
+ * Layout (grid/colspan/lanes) ships with the future timetable components;
+ * only the color semantics live here so every timetable surface agrees.
+ */
+@layer components {
+  .cell-theory {
+    background-color: var(--steel-tint);
+    border-left: 3px solid var(--steel);
+    border-radius: 5px;
   }
 
-  #social .button-icon {
-    filter: invert(1) brightness(2);
+  .cell-practical {
+    background-color: var(--sage-tint);
+    border-left: 3px solid var(--sage);
+    border-radius: 5px;
   }
-}
 
-body {
-  margin: 0;
-}
-
-#root {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
-  min-height: 100svh;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
-}
-
-h1,
-h2 {
-  font-family: var(--heading);
-  font-weight: 500;
-  color: var(--text-h);
-}
-
-h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
+  .free-cell {
+    background-color: var(--free);
+    color: var(--free-ink);
+    font-weight: 600;
   }
-}
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
+
+  .busy-cell {
+    background-color: var(--signal-tint);
+    color: var(--signal);
   }
-}
-p {
-  margin: 0;
-}
-
-code,
-.counter {
-  font-family: var(--mono);
-  display: inline-flex;
-  border-radius: 4px;
-  color: var(--text-h);
-}
-
-code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
 }
