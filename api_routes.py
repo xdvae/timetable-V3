@@ -12,7 +12,7 @@ session cookie — no new auth system, no tokens, no CORS.
 """
 import uuid
 
-from flask import Blueprint, jsonify, request, url_for
+from flask import Blueprint, jsonify, request
 from flask_login import login_user, logout_user, login_required, current_user
 from sqlalchemy import func
 
@@ -135,7 +135,8 @@ def _config_json(cfg):
 
 
 def _cell_json(sc):
-    """Structured equivalent of app.cell_text_for(): same fields, no HTML."""
+    """Structured per-class cell payload: same fields the old Jinja timetable
+    view rendered as HTML, without the HTML."""
     a = sc.assignment
     subj = a.subject.name if a.subject else "?"
     fac = a.faculty.name if a.faculty else "?"
@@ -169,7 +170,7 @@ def _lane_rows_json(classes, days, periods):
 
 
 def _view_title_json(view, obj_id):
-    """Same titles as app.view_title(), with JSON 404s instead of HTML ones."""
+    """Same titles as helpers.view_title(), with JSON 404s instead of HTML ones."""
     if view == "section":
         obj = Section.query.get(obj_id)
         if not obj:
@@ -202,8 +203,11 @@ def api_login():
     if user and user.check_password(data.get("password", "")):
         login_user(user)
         next_page = request.args.get("next")
+        # Literal React dashboard path: api_login must not depend on the
+        # Jinja dashboard endpoint (retired in Phase 5B). "/" is both the
+        # Flask dashboard URL and the React dashboard route.
         return jsonify({"ok": True, "username": user.username,
-                        "redirect": next_page or url_for("dashboard")})
+                        "redirect": next_page or "/"})
     return jsonify({"error": "Incorrect username or password."}), 401
 
 
@@ -444,8 +448,8 @@ def api_timetable_home():
 @api_bp.route("/timetable/<view>/<int:obj_id>", methods=["GET"])
 @login_required
 def api_timetable_view(view, obj_id):
-    # Reuse the Jinja view's query helper so filtering semantics are identical.
-    from app import get_view_classes
+    # Reuse the shared timetable query helper so filtering semantics are identical.
+    from helpers import get_view_classes
     title = _view_title_json(view, obj_id)
     cfg = _get_config()
     days, periods = cfg.day_list(), cfg.period_list()
@@ -614,8 +618,8 @@ def api_program_delete(pid):
 @login_required
 def api_enrollment_create():
     # Same auto-generation as the Jinja enrollments form (sections split
-    # evenly, letters A.., lab groups per section). Reuses app.split_evenly.
-    from app import split_evenly, letters
+    # evenly, letters A.., lab groups per section). Reuses helpers.split_evenly.
+    from helpers import split_evenly, letters
     data = _data()
     cfg = _get_config()
     program_id = _required_int(data, "program_id")
@@ -849,7 +853,8 @@ def init_api(app, login_manager):
     @login_manager.unauthorized_handler
     def _api_aware_unauthorized():
         # Machine-readable 401 for API callers; every other request falls
-        # through to Flask-Login's default (flash + redirect to /login?next=)
+        # through to Flask-Login's default (a plain 401 abort — no
+        # login_view is configured since React owns the /login page)
         # by temporarily restoring the default handler for one call.
         if (request.blueprint == api_bp.name) or (request.path or "").startswith("/api/"):
             return jsonify({"error": "Authentication required."}), 401

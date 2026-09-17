@@ -126,33 +126,6 @@ def export_html(grid, days, period_labels, title="Timetable"):
     return "\n".join(html)
 
 
-def export_html_multi(panels, days, period_labels, title="Timetable"):
-    """panels: list of (panel_name, grid) — one table per panel, stacked on one printable page."""
-    html = [f"<html><head><meta charset='utf-8'><title>{title}</title>",
-            "<style>",
-            "body{font-family:Arial,sans-serif;padding:20px;}",
-            "table{border-collapse:collapse;width:100%;margin-bottom:30px;}",
-            "th,td{border:1px solid #999;padding:8px;text-align:center;font-size:13px;}",
-            "th{background:#2c3e50;color:#fff;}",
-            "td.day{background:#f0f0f0;font-weight:bold;}",
-            "h2{font-family:Arial,sans-serif;}",
-            "h3{font-family:Arial,sans-serif;color:#2c3e50;margin-top:30px;}",
-            "@media print{ body{padding:0;} }",
-            "</style></head><body>",
-            f"<h2>{title}</h2>"]
-    for name, grid in panels:
-        rows = grid_to_rows(grid, days, period_labels)
-        html.append(f"<h3>{name}</h3><table>")
-        header = rows[0]
-        html.append("<tr>" + "".join(f"<th>{h}</th>" for h in header) + "</tr>")
-        for row in rows[1:]:
-            html.append("<tr><td class='day'>" + row[0] + "</td>" +
-                         "".join(f"<td>{c}</td>" for c in row[1:]) + "</tr>")
-        html.append("</table>")
-    html.append("</body></html>")
-    return "\n".join(html)
-
-
 def _draw_grid_on_sheet(ws, grid, days, period_labels, title):
     header_fill = PatternFill(start_color="2C3E50", end_color="2C3E50", fill_type="solid")
     day_fill = PatternFill(start_color="ECF0F1", end_color="ECF0F1", fill_type="solid")
@@ -203,29 +176,6 @@ def export_xlsx(grid, days, period_labels, title="Timetable"):
     ws = wb.active
     ws.title = "Timetable"
     _draw_grid_on_sheet(ws, grid, days, period_labels, title)
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    return buf
-
-
-def export_xlsx_multi(panels, days, period_labels, title="Timetable"):
-    """panels: list of (panel_name, grid) — one worksheet per panel."""
-    wb = Workbook()
-    first = True
-    used_names = set()
-    for name, grid in panels:
-        safe = (name or "Sheet")[:31]
-        base = safe
-        n = 1
-        while safe in used_names:
-            n += 1
-            safe = f"{base[:28]}_{n}"
-        used_names.add(safe)
-        ws = wb.active if first else wb.create_sheet()
-        ws.title = safe
-        first = False
-        _draw_grid_on_sheet(ws, grid, days, period_labels, f"{title} — {name}")
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)

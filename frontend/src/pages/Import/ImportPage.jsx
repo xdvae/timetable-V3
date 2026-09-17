@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { Link } from "react-router";
-import { CircleAlert, CircleCheck, FileUp, Upload } from "lucide-react";
+import { CircleAlert, CircleCheck, Download, FileUp, Upload } from "lucide-react";
 
 import { Page, Panel } from "@/components/layout/page.jsx";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert.jsx";
@@ -21,7 +21,7 @@ function isCsvFile(file) {
  * the backend (csv_import.py); this only picks a .csv file, POSTs it as
  * multipart FormData, and renders the backend's own messages + row errors.
  */
-function ImportCard({ inputId, title, description, columns, upload, successTitle }) {
+function ImportCard({ inputId, title, description, columns, upload, successTitle, sampleHref, sampleLabel }) {
   const toast = useToast();
   const inputRef = useRef(null);
   const [file, setFile] = useState(null);
@@ -75,6 +75,16 @@ function ImportCard({ inputId, title, description, columns, upload, successTitle
 
   return (
     <Panel accent="steel" title={title} description={description}>
+      {sampleHref ? (
+        <div className="mb-4">
+          <Button asChild variant="outline" size="sm">
+            <a href={sampleHref}>
+              <Download aria-hidden="true" />
+              {sampleLabel}
+            </a>
+          </Button>
+        </div>
+      ) : null}
       <p className="mb-4 text-xs text-muted-foreground">
         Columns: <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.72rem]">{columns}</code>
       </p>
@@ -154,6 +164,8 @@ export function ImportPage() {
           columns="name, room_type (theory/lab), capacity, equipment_count (optional, labs only)"
           upload={importRoomsCsv}
           successTitle="Rooms import finished"
+          sampleHref="/import/sample/rooms"
+          sampleLabel="Download sample rooms CSV"
         />
         <ImportCard
           inputId="workload-csv"
@@ -162,6 +174,8 @@ export function ImportPage() {
           columns="program, year_label, section, total_students, faculty_name, faculty_type, subject_code, subject_name, session_type (theory/practical), credits, periods_per_week, block_length"
           upload={importWorkloadCsv}
           successTitle="Workload import finished"
+          sampleHref="/import/sample/workload"
+          sampleLabel="Download sample workload CSV"
         />
       </div>
 

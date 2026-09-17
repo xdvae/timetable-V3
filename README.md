@@ -6,12 +6,13 @@ teaching assignments — and the system generates a conflict-free timetable with
 CP-SAT, viewable by section, faculty member, or room and exportable as Excel, CSV, or printable
 HTML.
 
-The project has two frontends sharing one backend:
+The project has one browser frontend and one backend:
 
-- **Flask backend** (`app.py`, `models.py`, `scheduler.py`, …) — the scheduling engine, the
-  database, the original server-rendered Jinja interface, and a JSON API layer.
-- **React frontend** (`frontend/`) — the new administrative UI, currently under migration,
-  communicating with Flask over same-origin `/api/*` requests.
+- **Flask backend** (`app.py`, `api_routes.py`, `models.py`, `scheduler.py`, …) — the
+  scheduling engine, the database, the JSON API, file exports/sample downloads,
+  and (in production) the React static bundle.
+- **React frontend** (`frontend/`) — the administrative UI, communicating with Flask
+  over same-origin `/api/*` requests (plus same-origin export/download URLs).
 
 ## Overview
 
@@ -22,7 +23,8 @@ a weekly timetable in which no room, faculty member, or student group is ever do
 
 Backend responsibilities:
 
-- **Flask** — HTTP routes for the legacy Jinja pages and the JSON API.
+- **Flask** — HTTP routes for the JSON API, file exports/sample downloads, and the
+  React production bundle.
 - **SQLAlchemy** — ORM over the application database (SQLite file by default).
 - **Flask-Login** — session-cookie authentication (single admin login per deployment).
 - **OR-Tools CP-SAT** — the constraint solver behind timetable generation.
@@ -42,28 +44,33 @@ Browser
    ▼
 React frontend (frontend/)
    │  same-origin /api/* (session cookie, no tokens)
+   │  same-origin /export/* and /import/sample/* downloads
    ▼
-Flask JSON API layer (api_routes.py)
+Flask (app.py)
+   ├── JSON API layer (api_routes.py)
+   ├── Export / sample-download routes
+   ├── React production bundle (frontend/dist/, SPA fallback)
    │
    ├── SQLAlchemy / database (models.py, instance/timetable.db)
    │
-   ├── Scheduler / OR-Tools (scheduler.py)
-   │
-   └── existing Flask/Jinja application (app.py + templates/)
+   └── Scheduler / OR-Tools (scheduler.py)
 ```
 
-An important architectural decision: **the existing Flask/Jinja application remains intact**.
-The React application is being introduced as a new frontend inside `frontend/`, and the JSON
-API layer under `/api/*` exists specifically so React can communicate with the existing Flask
-application. The non-API Flask routes keep serving the legacy server-rendered interface, and
-the React timetable is being built with custom CSS Grid (not FullCalendar) against the same
-lane/block semantics the backend already produces.
+The React application is the browser frontend. The Flask application exposes the JSON
+API under `/api/*`, serves timetable exports under `/export/*` and sample CSVs under
+`/import/sample/*` (both called directly by React as same-origin downloads), and — in
+production — serves the React production build with an SPA fallback. The React
+timetable uses custom CSS Grid (not FullCalendar) against the same lane/block semantics
+the backend produces.
 
 ## Project Structure
 
 ```text
-app.py              Flask routes (legacy Jinja pages)
-api_routes.py       Additive JSON API layer (/api/*) for the React frontend
+app.py              Flask application (API + export/sample-download routes +
+                    React production-bundle serving)
+api_routes.py       JSON API layer (/api/*) for the React frontend
+helpers.py          Shared timetable helpers (section splitting, timetable-view
+                    queries/titles, export cell text) used by app.py and api_routes.py
 models.py           SQLAlchemy models (Config, Room, Faculty, Program,
                     Enrollment, Section, LabGroup, Subject,
                     TeachingAssignment, ScheduledClass, AdminUser)
@@ -79,7 +86,6 @@ Procfile            gunicorn entrypoint for hosting platforms
 .env.example        Documented environment variables (safe to commit)
 instance/           Local application state (see Database)
 sample_data/        rooms_sample.csv + workload_sample.csv
-templates/          Legacy Jinja templates (Bootstrap 5)
 frontend/           React application (see Frontend)
 ```
 
@@ -92,7 +98,7 @@ frontend/
 │   │   ├── feedback/   toast system, loading/error/empty states
 │   │   ├── layout/     AppShell, Page, Panel, placeholders
 │   │   ├── navigation/ sidebar + nav-config
-│   │   ├── timetable/  reserved for the future timetable UI
+│   │   ├── timetable/  TimetableGrid, TimetableClassBlock, TimetableLegend
 │   │   └── ui/         shadcn/ui primitives (button, input, table, …)
 │   ├── hooks/          useApi, useAuth, useToast, useMediaQuery
 │   ├── lib/            utils (cn)
@@ -113,25 +119,24 @@ frontend/
 
 ### Flask application (`app.py`)
 
-Owns all business logic and the legacy UI: dashboard counts, configuration, rooms, faculty
-(including per-slot availability), programs, enrollments (with automatic section/lab-group
-splitting), subjects, teaching assignments (with weekly-load accounting), CSV import, the
-scheduler run endpoint, timetable views by section/faculty/room, the Who's Free matrix, file
-exports, and password management. Authentication is enforced globally: every route except the
-login page requires a signed-in session.
+Owns the HTTP layer: the JSON API blueprint, timetable file exports
+(`/export/<view>/<id>/<fmt>`), sample CSV downloads (`/import/sample/<kind>`), and
+serving the React production bundle with an SPA fallback. Shared timetable helpers
+(section splitting, view queries, export cell text) live in `helpers.py` so both the
+routes and the API use one implementation. Authentication is enforced globally: every
+backend route except the API login and the React shell requires a signed-in session.
 
 ### API layer (`api_routes.py`)
 
-An isolated Blueprint exposing the same data and outcomes as JSON, reusing the existing
-queries, helpers, and scheduler invocation — no duplicated business rules. It was introduced
-specifically for React connectivity. Unauthenticated API calls receive a machine-readable
-`401 {"error": "Authentication required."}` instead of the HTML login redirect.
+A Blueprint exposing the data and outcomes as JSON, reusing the existing queries,
+helpers, and scheduler invocation — no duplicated business rules. Unauthenticated API
+calls receive a machine-readable `401 {"error": "Authentication required."}`.
 
 Authentication/session:
 
 - `POST /api/login`, `POST /api/logout`, `GET /api/me`, `POST /api/change-password`
 
-Read APIs (same shapes the Jinja pages already use):
+Read APIs:
 
 - `/api/dashboard`, `/api/config`, `/api/rooms`, `/api/faculty`,
   `/api/faculty/<fid>/availability`, `/api/programs`, `/api/enrollments`,
@@ -139,11 +144,12 @@ Read APIs (same shapes the Jinja pages already use):
   `/api/overview`, `/api/timetable`, `/api/timetable/<view>/<obj_id>`,
   `/api/timetable/free`
 
-Write APIs exist as additive variants of the form POSTs (rooms, faculty, programs,
+Write APIs mirror the former form POSTs (rooms, faculty, programs,
 enrollments, subjects, assignments, config, availability, CSV imports, schedule generation),
 returning `{ok, message, …}` on success and `{error, field_errors?}` with 4xx statuses on
-validation failure. Timetable downloads (Excel/CSV/printable HTML) and sample CSVs keep
-working through the existing download routes, which React calls directly.
+validation failure. Timetable downloads (Excel/CSV/printable HTML via `/export/*`) and
+sample CSVs (`/import/sample/*`) are same-origin download routes, which React calls
+directly.
 
 ## Scheduling Engine
 
@@ -160,10 +166,9 @@ the React frontend, which only renders the resulting lane/block structures.
 The backend supports three timetable views — `section`, `faculty`, `room` — plus a Who's Free
 matrix showing every faculty member's hour-by-hour status for a chosen day. Multi-period
 blocks render as one merged cell (`colspan`); genuinely parallel sessions (e.g. two lab
-groups in different rooms) render as stacked lanes under the same day. The React timetable UI
-is being implemented with custom CSS Grid against these exact semantics and is not complete
-yet; until then the full timetable experience lives in the Jinja interface and the JSON
-payloads described above.
+groups in different rooms) render as stacked lanes under the same day. The React timetable
+renders these lane/block structures with custom CSS Grid, and the Who's Free matrix is a
+dedicated React page against `/api/timetable/free`.
 
 ## Frontend
 
@@ -196,8 +201,9 @@ secret — only `.env.example` belongs in Git.
 
 ## Current Frontend Status
 
-Accurate as of the `frontend` branch. A route placeholder existing does **not** mean the
-page is implemented — only the items marked done render real backend data.
+Accurate as of the `frontend` branch. The React app is the complete browser frontend:
+every workflow below renders real backend data over `/api/*` (exports and sample CSVs
+use the same-origin download routes).
 
 ### Foundation
 
@@ -206,33 +212,28 @@ page is implemented — only the items marked done render real backend data.
 - [x] Tailwind/shadcn foundation
 - [x] React Router
 - [x] Responsive application shell
-- [x] Authentication foundation (`/api/me`, `RequireAuth`, `?next=`)
+- [x] Authentication (`/login` sign-in form, `GET /api/me`, `RequireAuth`, `?next=`)
 - [x] Centralized API client
-- [x] Flask JSON connectivity layer (`api_routes.py`)
+- [x] Flask JSON API layer (`api_routes.py`)
 
 ### Implemented React pages (real data)
 
+- [x] Login (`/login`, session-cookie sign-in with `?next=` redirect)
 - [x] Dashboard (`/`)
-- [x] Config (`/config`, read-only)
-- [x] Rooms (`/rooms`, read-only)
-- [x] Faculty (`/faculty`, read-only, links to availability)
-
-### In progress / planned
-
-- [ ] Login UI (route + shell exist; full sign-in form pending)
-- [ ] Faculty availability UI (route + navigation links exist)
-- [ ] Programs
-- [ ] Enrollments
-- [ ] Sections
-- [ ] Subjects
-- [ ] Teaching assignments
-- [ ] Import UI
-- [ ] Overview
-- [ ] Timetable UI (custom CSS Grid; backend semantics documented above)
-- [ ] Who's Free UI
-- [ ] Change Password UI
-- [ ] React CRUD workflows
-- [ ] Full integration/regression testing
+- [x] Config (`/config`, read + write)
+- [x] Rooms (`/rooms`, create + delete)
+- [x] Faculty (`/faculty`, create + delete, links to availability)
+- [x] Faculty availability (`/faculty/:fid/availability`, read + write)
+- [x] Programs (`/programs`, create + delete)
+- [x] Enrollments (`/enrollments`, create + delete, auto-generated sections)
+- [x] Sections (`/enrollments/:eid/sections`, read-only)
+- [x] Subjects (`/subjects`, create + delete)
+- [x] Teaching assignments (`/assignments`, create + delete)
+- [x] Import (`/import`, rooms + workload CSV upload, sample CSV downloads)
+- [x] Overview (`/overview`, sections/groups + faculty workload)
+- [x] Timetable (`/timetable`, generation + section/faculty/room views + Excel/CSV/Print export)
+- [x] Who's Free (`/timetable/free`)
+- [x] Change Password (`/account/change-password`)
 
 ## Local Development
 
@@ -259,6 +260,18 @@ npm run dev
 Vite serves the React app (its normal development port) and proxies `/api` requests to the
 backend at `127.0.0.1:5050`, so same-origin session cookies work during development.
 `npm run lint` and `npm run build` verify the frontend.
+
+Production (single process, same origin):
+
+```bash
+cd frontend && npm install && npm run build
+cd .. && gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 90
+```
+
+Flask serves `frontend/dist/` (git-ignored build output) with an SPA fallback: unknown
+non-API `GET` paths return `index.html` so React Router deep links work, while unmatched
+`/api/*` paths still return JSON 404s and `/export/*` + `/import/sample/*` keep serving
+downloads. If `dist/` has not been built, browser hits 404 but the API is unaffected.
 
 Demo data (optional, exercises the real import pipeline):
 
@@ -304,8 +317,8 @@ Two formats, handled by `csv_import.py` (also reachable as structured JSON via
 
 ## Export
 
-`export.py` builds day × period grids (single view per file) served by the existing routes,
-which the React app will call directly:
+`export.py` builds day × period grids (single view per file) served by `/export/*`
+routes, which the React app calls directly:
 
 - **Excel** (`.xlsx`, styled workbook) — download
 - **CSV** (`text/csv`) — download
@@ -319,17 +332,16 @@ room at a time).
 ### Backend preservation
 
 `scheduler.py`, `models.py`, `validators.py`, `csv_import.py`, `export.py`, the database
-schema, and the existing Jinja interface must not change unless strictly required for
+schema, and the API contracts must not change unless strictly required for
 React/backend connectivity or application integrity. All React work lives under `frontend/`.
-The API layer (`api_routes.py`) is the only sanctioned bridge — extend it additively rather
-than editing business logic.
+The API layer (`api_routes.py`) plus shared `helpers.py` is the sanctioned bridge — extend
+it rather than editing business logic.
 
 ### Frontend rules
 
 Use React, JavaScript, Tailwind, shadcn/ui, Lucide, and React Router. Do not introduce MUI,
 Bootstrap, Ant Design, Chakra UI, or FullCalendar into the React app, and do not add state,
-data-fetching, or styling libraries without a concrete, recorded need. (The legacy Jinja
-templates keep their existing Bootstrap dependency; that rule applies to the new frontend.)
+data-fetching, or styling libraries without a concrete, recorded need.
 
 ## Git Workflow
 
@@ -357,13 +369,10 @@ License: not currently specified (no LICENSE file in the repository).
 
 ## Known Limitations / Roadmap
 
-- The React migration is ongoing: most workflows (programs, enrollments, subjects,
-  assignments, import, overview, timetable, CRUD) still exist only in the Jinja UI and as
-  JSON endpoints awaiting React pages.
 - Each deployment serves one institution with one admin login; multi-tenancy is not
   implemented.
-- Production deployment architecture (beyond the provided `Procfile`/gunicorn entrypoint)
-  is not finalized.
+- Production is a single gunicorn process serving both the API and the React build
+  (see Local Development); split static hosting is not currently configured.
 - The checked-in demo database does not currently regenerate cleanly end-to-end
   (`audit_schedule.py` reports break-spanning lab blocks against the current config), so
   treat generation results on the demo dataset as illustrative until the data is refreshed.
