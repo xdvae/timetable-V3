@@ -33,6 +33,17 @@ export function getFreeFaculty(day) {
 }
 
 /**
+ * POST /api/schedule/run (no body) → 200 { ok, message, status,
+ *   placements, run_id }. Invokes the existing OR-Tools scheduler with the
+ *   same inputs as the Jinja route and REPLACES the stored schedule.
+ * Failure (infeasible / nothing to schedule) → 422
+ * { error: "Scheduling failed: …" }; the previous schedule is preserved.
+ */
+export function runScheduler() {
+  return api.post("/api/schedule/run");
+}
+
+/**
  * Existing Jinja export endpoints (same-origin GETs, session cookie
  * applies — no new API involved). `fmt` is xlsx, csv, or html (print).
  */

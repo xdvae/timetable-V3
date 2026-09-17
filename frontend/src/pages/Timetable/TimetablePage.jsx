@@ -1,19 +1,33 @@
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { Link, useParams } from "react-router";
 import {
   ArrowLeft,
   CalendarDays,
   CheckCircle2,
+  CircleCheck,
   Download,
+  LoaderCircle,
   Printer,
+  TriangleAlert,
   UserCheck,
 } from "lucide-react";
 
 import { Page, Panel } from "@/components/layout/page.jsx";
 import { EmptyState, PageLoading, QueryError } from "@/components/feedback/data-states.jsx";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert.jsx";
 import { Button } from "@/components/ui/button.jsx";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog.jsx";
 import { useApi } from "@/hooks/use-api.js";
-import { exportUrl, getTimetableHome, getTimetableView } from "@/services/api/timetable.js";
+import { useMutation } from "@/hooks/use-mutation.js";
+import { useToast } from "@/hooks/use-toast.js";
+import { exportUrl, getTimetableHome, getTimetableView, runScheduler } from "@/services/api/timetable.js";
 import { TimetableGrid } from "@/components/timetable/TimetableGrid.jsx";
 import { TimetableLegend } from "@/components/timetable/TimetableLegend.jsx";
 
@@ -23,6 +37,104 @@ const VALID_VIEWS = ["section", "faculty", "room"];
 function hasScheduledClasses(dayRows) {
   return (dayRows ?? []).some((row) =>
     (row.lanes ?? []).some((lane) => (lane ?? []).some((cell) => !cell.empty))
+  );
+}
+
+/**
+ * Schedule generation panel. Invokes the existing OR-Tools scheduler via
+ * POST /api/schedule/run and displays its result; all solving stays
+ * server-side. Generation REPLACES the stored timetable, so confirmation
+ * is required. The run can take up to ~30s: the button stays disabled with
+ * a textual progress indicator (the backend exposes no progress events).
+ */
+function GeneratePanel({ onGenerated }) {
+  const toast = useToast();
+  const { execute, isSubmitting } = useMutation(runScheduler);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [result, setResult] = useState(null);
+
+  async function handleConfirm() {
+    setConfirmOpen(false);
+    setResult(null);
+    const res = await execute();
+    if (res.ok) {
+      setResult({ ok: true, data: res.data });
+      toast.success(res.data.message || "Timetable generated.", { title: "Schedule generated" });
+      onGenerated();
+    } else if (res.error) {
+      // Backend message preserved verbatim (e.g. "Scheduling failed: …");
+      // the previous schedule, if any, is left untouched server-side.
+      setResult({ ok: false, error: res.error });
+      toast.error(res.error.message || "Scheduling failed.", { title: "Scheduling failed" });
+      onGenerated();
+    }
+  }
+
+  return (
+    <Panel
+      accent="brass"
+      title="Generate the timetable"
+      description="Runs the scheduler against everything currently entered. Usually takes a few seconds to under a minute."
+      actions={
+        <Button onClick={() => setConfirmOpen(true)} disabled={isSubmitting} size="lg">
+          {isSubmitting ? (
+            <>
+              <LoaderCircle className="animate-spin" aria-hidden="true" />
+              Generating…
+            </>
+          ) : (
+            "Generate Timetable"
+          )}
+        </Button>
+      }
+    >
+      {isSubmitting ? (
+        <p className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
+          <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
+          Schedule generation is in progress. This usually takes a few seconds to under a minute —
+          please wait.
+        </p>
+      ) : null}
+      {result?.ok ? (
+        <Alert variant="success">
+          <CircleCheck aria-hidden="true" />
+          <AlertTitle>Schedule generated</AlertTitle>
+          <AlertDescription>
+            <p>{result.data.message}</p>
+            <p className="mt-1 text-xs tabular-nums">
+              Status: {result.data.status} · {result.data.placements} class blocks placed
+            </p>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+      {result && !result.ok ? (
+        <Alert variant="destructive">
+          <TriangleAlert aria-hidden="true" />
+          <AlertTitle>Scheduling failed</AlertTitle>
+          <AlertDescription>
+            {result.error.message || "The scheduler could not produce a timetable."}
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Generate timetable?</DialogTitle>
+            <DialogDescription>
+              Runs the scheduler against everything currently entered. This replaces the current
+              timetable. Usually takes a few seconds to under a minute.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleConfirm}>Generate</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </Panel>
   );
 }
 
@@ -52,6 +164,7 @@ export function TimetablePage() {
   return (
     <Page title="Timetable" subtitle="Generate the schedule, then look it up by section, faculty member, or room.">
       <div className="space-y-5">
+        <GeneratePanel onGenerated={retry} />
         {data.has_schedule ? (
           <p className="flex items-center gap-2 text-sm font-medium text-sage">
             <CheckCircle2 className="size-4" aria-hidden="true" />
@@ -59,8 +172,7 @@ export function TimetablePage() {
           </p>
         ) : (
           <p className="text-sm text-muted-foreground">
-            No timetable has been generated yet. Schedule generation ships in a later phase — the views
-            below unlock once a schedule exists.
+            No timetable has been generated yet — use Generate above, then pick a view below.
           </p>
         )}
 
