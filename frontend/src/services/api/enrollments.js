@@ -23,3 +23,19 @@ export function getEnrollments() {
 export function getEnrollmentSections(eid) {
   return api.get(`/api/enrollments/${eid}/sections`);
 }
+
+/**
+ * POST /api/enrollments → 201 { ok, message, enrollment, sections[] }.
+ * Sections + lab groups are auto-generated server-side.
+ */
+export function createEnrollment(payload) {
+  return api.post("/api/enrollments", payload);
+}
+
+/**
+ * POST /api/enrollments/<eid>/delete → 200 { ok, message }.
+ * Backend message confirms sections/lab groups go with it. 404 when missing.
+ */
+export function deleteEnrollment(id) {
+  return api.post(`/api/enrollments/${id}/delete`);
+}

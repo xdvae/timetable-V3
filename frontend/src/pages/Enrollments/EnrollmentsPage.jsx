@@ -1,11 +1,28 @@
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { Link, useParams } from "react-router";
-import { ArrowLeft, Layers, UsersRound } from "lucide-react";
+import { ArrowLeft, Layers, Plus, Trash2, UsersRound } from "lucide-react";
 
 import { Page, Panel } from "@/components/layout/page.jsx";
 import { EmptyState, PageLoading, QueryError } from "@/components/feedback/data-states.jsx";
 import { Badge } from "@/components/ui/badge.jsx";
 import { Button } from "@/components/ui/button.jsx";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog.jsx";
+import { Input } from "@/components/ui/input.jsx";
+import { Label } from "@/components/ui/label.jsx";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select.jsx";
 import {
   Table,
   TableBody,
@@ -14,11 +31,133 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table.jsx";
+import { DeleteConfirmDialog, FieldError, MutationError } from "@/components/feedback/mutation.jsx";
 import { useApi } from "@/hooks/use-api.js";
-import { getEnrollmentSections, getEnrollments } from "@/services/api/enrollments.js";
+import { useMutation } from "@/hooks/use-mutation.js";
+import { useToast } from "@/hooks/use-toast.js";
+import {
+  createEnrollment,
+  deleteEnrollment,
+  getEnrollmentSections,
+  getEnrollments,
+} from "@/services/api/enrollments.js";
+
+function AddEnrollmentDialog({ open, onOpenChange, onCreated, programs }) {
+  const toast = useToast();
+  const { execute, isSubmitting, error, fieldErrors } = useMutation(createEnrollment);
+  const [programId, setProgramId] = useState(programs[0]?.id != null ? String(programs[0].id) : "");
+  const [yearLabel, setYearLabel] = useState("");
+  const [totalStudents, setTotalStudents] = useState("");
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    const result = await execute({
+      program_id: programId,
+      year_label: yearLabel,
+      total_students: totalStudents,
+    });
+    if (result.ok) {
+      toast.success(result.data.message || "Enrollment added.");
+      onOpenChange(false);
+      onCreated();
+    } else if (result.error) {
+      toast.error(result.error.message || "Could not add enrollment.");
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={isSubmitting ? undefined : onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Add enrollment</DialogTitle>
+          <DialogDescription>
+            Sections and lab groups are auto-generated from the student count.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <MutationError error={error && !error.fieldErrors ? error : null} />
+          <div>
+            <Label htmlFor="enrollment-program">Program</Label>
+            <Select value={programId} onValueChange={setProgramId} disabled={isSubmitting}>
+              <SelectTrigger id="enrollment-program" className="mt-1.5">
+                <SelectValue placeholder="Select a program" />
+              </SelectTrigger>
+              <SelectContent>
+                {programs.map((program) => (
+                  <SelectItem key={program.id} value={String(program.id)}>
+                    {program.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <FieldError id="enrollment-program-error" message={fieldErrors.program_id} />
+          </div>
+          <div>
+            <Label htmlFor="enrollment-year">Year / Semester label</Label>
+            <Input
+              id="enrollment-year"
+              className="mt-1.5"
+              required
+              value={yearLabel}
+              onChange={(e) => setYearLabel(e.target.value)}
+              placeholder="e.g. 1st Year or Sem II"
+              disabled={isSubmitting}
+              aria-describedby={fieldErrors.year_label ? "enrollment-year-error" : undefined}
+            />
+            <FieldError id="enrollment-year-error" message={fieldErrors.year_label} />
+          </div>
+          <div>
+            <Label htmlFor="enrollment-students">Total students</Label>
+            <Input
+              id="enrollment-students"
+              className="mt-1.5"
+              type="number"
+              required
+              value={totalStudents}
+              onChange={(e) => setTotalStudents(e.target.value)}
+              disabled={isSubmitting}
+              aria-describedby={fieldErrors.total_students ? "enrollment-students-error" : undefined}
+            />
+            <FieldError id="enrollment-students-error" message={fieldErrors.total_students} />
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={isSubmitting || programs.length === 0}>
+              {isSubmitting ? "Adding…" : "Add Enrollment"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 export function EnrollmentsPage() {
+  const toast = useToast();
   const { data, error, isLoading, retry } = useApi(getEnrollments);
+  const [addOpen, setAddOpen] = useState(false);
+  const [addKey, setAddKey] = useState(0);
+  const [pendingDelete, setPendingDelete] = useState(null);
+  const deletion = useMutation(deleteEnrollment);
+
+  function openAddDialog() {
+    setAddKey((key) => key + 1);
+    setAddOpen(true);
+  }
+
+  async function handleDelete() {
+    if (!pendingDelete) return;
+    const result = await deletion.execute(pendingDelete.id);
+    if (result.ok) {
+      toast.success(result.data.message || "Enrollment deleted.");
+      setPendingDelete(null);
+      retry();
+    } else if (result.error) {
+      toast.error(result.error.message || "Could not delete enrollment.");
+    }
+  }
 
   if (isLoading && !data) {
     return (
@@ -43,6 +182,10 @@ export function EnrollmentsPage() {
   }
 
   const enrollments = data.enrollments ?? [];
+  const programs = data.programs ?? [];
+  const deleteLabel = pendingDelete
+    ? `${pendingDelete.program_name} ${pendingDelete.year_label}`
+    : "";
 
   return (
     <Page
@@ -52,12 +195,28 @@ export function EnrollmentsPage() {
           ? "Cohorts with auto-generated sections and lab groups."
           : `${enrollments.length} ${enrollments.length === 1 ? "enrollment" : "enrollments"} · program → enrollment → section → lab group`
       }
+      actions={
+        <Button onClick={openAddDialog}>
+          <Plus aria-hidden="true" />
+          Add Enrollment
+        </Button>
+      }
     >
       {enrollments.length === 0 ? (
         <EmptyState
           icon={UsersRound}
           title="No enrollments yet"
-          description="Enrollments added in the backend will appear here with their program, year, and student count."
+          description={
+            programs.length === 0
+              ? "Add a program first, then add your first enrollment cohort."
+              : "Add your first enrollment cohort to get started."
+          }
+          action={
+            <Button onClick={openAddDialog} className="mt-2">
+              <Plus aria-hidden="true" />
+              Add Enrollment
+            </Button>
+          }
         />
       ) : (
         <Panel accent="steel" title="All enrollments">
@@ -81,15 +240,26 @@ export function EnrollmentsPage() {
                     {enrollment.total_students} students
                   </TableCell>
                   <TableCell className="text-right">
-                    <Button asChild variant="outline" size="sm">
-                      <Link
-                        to={`/enrollments/${enrollment.id}/sections`}
-                        aria-label={`View sections for ${enrollment.program_name} ${enrollment.year_label}`}
+                    <div className="flex justify-end gap-2">
+                      <Button asChild variant="outline" size="sm">
+                        <Link
+                          to={`/enrollments/${enrollment.id}/sections`}
+                          aria-label={`View sections for ${enrollment.program_name} ${enrollment.year_label}`}
+                        >
+                          <Layers aria-hidden="true" />
+                          View Sections
+                        </Link>
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setPendingDelete(enrollment)}
+                        aria-label={`Delete enrollment ${enrollment.program_name} ${enrollment.year_label}`}
                       >
-                        <Layers aria-hidden="true" />
-                        View Sections
-                      </Link>
-                    </Button>
+                        <Trash2 aria-hidden="true" className="text-signal" />
+                        Delete
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}
@@ -97,6 +267,29 @@ export function EnrollmentsPage() {
           </Table>
         </Panel>
       )}
+
+      <AddEnrollmentDialog
+        key={addKey}
+        open={addOpen}
+        onOpenChange={setAddOpen}
+        onCreated={retry}
+        programs={programs}
+      />
+      <DeleteConfirmDialog
+        open={pendingDelete !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPendingDelete(null);
+            deletion.reset();
+          }
+        }}
+        title={`Delete enrollment ${deleteLabel}?`}
+        description="This also deletes its sections and lab groups. This cannot be undone."
+        confirmLabel="Delete"
+        onConfirm={handleDelete}
+        isConfirming={deletion.isSubmitting}
+        error={deletion.error}
+      />
     </Page>
   );
 }
