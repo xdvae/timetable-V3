@@ -1,0 +1,93 @@
+# ============================================================
+# UniSchedule — root ignore rules (Python/Flask + Node/Vite/React)
+# NOTE: instance/timetable.db is already tracked in Git as intentional
+# demo state. Ignore rules below do not untrack it; do not delete it.
+# ============================================================
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Virtual environments (a venv/ folder exists locally; never commit it)
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Test / type-check / coverage caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage/
+.pyre/
+.pytype/
+
+# ---------- Environment / secrets ----------
+# Local secrets only. .env.example is documentation and stays committed.
+.env
+.env.*
+!.env.example
+
+# ---------- Node ----------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---------- Frontend build artifacts ----------
+frontend/dist/
+frontend/build/
+frontend/.vite/
+frontend/coverage/
+frontend/.eslintcache
+
+# ---------- General frontend / tool caches ----------
+.cache/
+.parcel-cache/
+.turbo/
+.vite/
+
+# ---------- Python / Flask generated files ----------
+*.log
+instance/*.log
+
+# ---------- SQLite ----------
+# New local database copies stay out of Git. The already-tracked
+# instance/timetable.db is preserved by the negation below.
+*.db
+*.sqlite
+*.sqlite3
+!instance/timetable.db
+
+# ---------- Backups ----------
+backups/
+*.bak
+
+# ---------- OS files ----------
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ---------- Editors (configs stay committable) ----------
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# ---------- Temporary files ----------
+*.tmp
+*.temp
+*.orig
+*.rej
