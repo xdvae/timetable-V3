@@ -23,6 +23,9 @@ Hard constraints:
     section, so they can't be in two places at once)
   * a faculty member doesn't teach more than `max_consecutive_teaching`
     periods in a row without at least one free period (a "break")
+  * HN1: a student section never has three consecutive theory periods in
+    one teaching segment of a day (labs/free periods reset the streak;
+    windows never cross the lunch break)
 
 Soft objective (what makes the timetable *good*, not just legal):
   * minimize the sum of start-periods across all sessions. Because a
@@ -42,7 +45,9 @@ from ortools.sat.python import cp_model
 # mirrors (predicates can never replace CP-SAT expressions — see Part 4).
 from backend.schedule_rules import (
     check_room_compatible,
+    hn1_windows,
     is_faculty_available,
+    overlap_count,
     valid_starts as rule_valid_starts,
 )
 
@@ -217,6 +222,32 @@ def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
                         terms.extend(fac_occ.get((fid, d, p), []))
                     if terms:
                         model.Add(sum(terms) <= max_consecutive)
+
+    # ---- HN1: max two consecutive theory periods per section per day ----
+    # Logical counterpart: schedule_rules.check_max_two_theory. For every
+    # section, day, and 3-period in-segment window: sum over theory-session
+    # candidate booleans of (overlap-period count * boolean) <= 2.
+    # Practical sessions contribute 0 and are excluded; each placement
+    # boolean appears once per window with its period-weighted coefficient.
+    theory_by_section = {}
+    for s_idx, sess in enumerate(sessions):
+        if sess["session_type"] != "theory":
+            continue
+        theory_by_section.setdefault(sess["group_key"], []).append(s_idx)
+    for sec_key in sorted(theory_by_section, key=str):
+        for d in days:
+            for window in hn1_windows(num_periods, break_after):
+                terms = []
+                for s_idx in theory_by_section[sec_key]:
+                    length = sessions[s_idx]["length"]
+                    for (od, start, r) in session_options[s_idx]:
+                        if od != d:
+                            continue
+                        coeff = overlap_count(start, length, window)
+                        if coeff:
+                            terms.append(coeff * x[(s_idx, od, start, r)])
+                if terms:
+                    model.Add(sum(terms) <= 2)
 
     # ---- Soft objective: minimize start periods (compact + early-finish) ----
     objective_terms = []

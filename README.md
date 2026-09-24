@@ -160,8 +160,10 @@ directly.
 `backend/scheduler.py` expands each teaching assignment into session blocks and places them with
 OR-Tools CP-SAT subject to hard constraints — room type/capacity/equipment match, no
 room/faculty/student-group double-booking, lab-group sessions never overlapping their parent
-section's theory, no block spanning the lunch break, faculty availability, and a maximum
-run of consecutive teaching periods — while minimizing how late in the day classes run so
+section's theory, no block spanning the lunch break, faculty availability, a maximum
+run of consecutive teaching periods, and HN1 (a student section may have at most two
+consecutive theory periods in a teaching-period segment of a day — labs and free periods
+reset the theory streak, and the streak does not cross configured breaks) — while minimizing how late in the day classes run so
 schedules come out compact with no dead gaps. Its rules are intentionally kept separate from
 the React frontend, which only renders the resulting lane/block structures.
 

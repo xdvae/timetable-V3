@@ -5,11 +5,14 @@ completely separately from the solver's own constraint-building logic.
 Run this any time after generating a timetable to double-check there are
 no room/faculty/student-group double-bookings, no break violations, no
 capacity/equipment violations, and no faculty member over the
-consecutive-teaching limit.
+consecutive-teaching limit, and HN1 (no section with three consecutive
+theory periods in one teaching segment of a day).
 
 Phase 6C: the logical checks below are applied through
 backend/schedule_rules.py (the shared rule layer) instead of inline
-re-implementations. This script still never imports backend/scheduler.py —
+re-implementations. Phase 6D adds HN1 detection (check_max_two_theory)
+reusing the section theory occupancy already collected for the H8
+hierarchy check. This script still never imports backend/scheduler.py —
 generation and auditing share rule *definitions*, not code paths.
 
 Read-only: performs SELECTs only, never commits.
@@ -127,6 +130,23 @@ with app.app_context():
             if not res.ok:
                 problems.append(f"CONSECUTIVE-TEACHING VIOLATION: {res.message}")
 
+    # HN1: max two consecutive theory periods per section/day, via the
+    # shared rule over the section theory occupancy collected above.
+    # Practicals never contribute (only theory periods were recorded).
+    from backend.models import Section
+    num_periods = len(cfg.period_list())
+    day_order = {d: i for i, d in enumerate(cfg.day_list())}
+    sec_names = {s.id: s.name for s in Section.query.all()}
+    for sec_id in sorted(section_theory_periods):
+        by_day = defaultdict(set)
+        for (d, p) in section_theory_periods[sec_id]:
+            by_day[d].add(p)
+        for d in sorted(by_day, key=lambda x: (day_order.get(x, 999), str(x))):
+            for res in rules.check_max_two_theory(
+                    by_day[d], num_periods, break_after,
+                    sec_names.get(sec_id, f"section {sec_id}"), d, sec_id):
+                problems.append(f"MAX_TWO_THEORY VIOLATION: {res.message}")
+
     if problems:
         print(f"[FAIL] {len(problems)} PROBLEM(S) FOUND:\n")
         for p in problems:
@@ -135,5 +155,6 @@ with app.app_context():
         print("[OK] No conflicts found: rooms, faculty, and student groups are never "
               "double-booked, no session crosses the break, room type/capacity/equipment "
               "always match, no faculty member exceeds the consecutive-teaching limit, "
-              "and no lab group's practical overlaps a whole-section theory class for its "
-              "own section.")
+              "no lab group's practical overlaps a whole-section theory class for its "
+              "own section, and no section has three consecutive theory periods in "
+              "one teaching segment of a day.")

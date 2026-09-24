@@ -16,9 +16,9 @@ these helpers for domain pruning and documents which logical rule each
 linear constraint mirrors. The audit script and the future validator call
 the same helpers to check persisted/proposed placements directly.
 
-Rule IDs mirror the Phase 6B inventory (H1..H14). Future rules
-(MAX_TWO_THEORY, LOCKED_BLOCK, SPECIALIZATION_*, preferences, manual-edit
-rules) are explicitly OUT OF SCOPE here and must not be added in 6C.
+Rule IDs mirror the Phase 6B inventory (H1..H14) plus HN1
+(MAX_TWO_THEORY, added Phase 6D). Other future rules (LOCKED_BLOCK,
+SPECIALIZATION_*, preferences, manual-edit rules) remain OUT OF SCOPE.
 """
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Set, Tuple
@@ -309,4 +309,75 @@ def check_session_coverage(expected_counts: Dict, actual_counts: Dict) -> List[R
                 f"Session '{key}' placed {got} time(s), expected {exp}.",
                 {"session": key, "expected": exp, "actual": got},
             ))
+    return results
+
+
+# --------------------------- HN1: max two consecutive theory (Phase 6D)
+# A student section may have at most two consecutive THEORY periods within
+# one teaching segment of a day. Labs/practicals never count as theory,
+# free periods naturally break the streak (occupancy-based, no counters),
+# and windows never cross the configured break. Applies per section, per
+# day. Independent of the faculty-side H12 rule.
+HN1_WINDOW = 3
+HN1_MAX_THEORY = 2
+
+
+def teaching_segments(num_periods: int, break_after: Optional[int]) -> List[List[int]]:
+    """Split periods 0..num_periods-1 into contiguous teaching segments.
+
+    Mirrors the H10 break semantics exactly: with break_after=N the break
+    sits between periods N-1 and N, so a block covering both is forbidden
+    and no HN1 window may span it. A missing/out-of-range break yields one
+    segment (consistent with spans_break() having no effect then).
+    """
+    if not break_after or break_after <= 0 or break_after >= num_periods:
+        return [list(range(num_periods))]
+    return [list(range(0, break_after)), list(range(break_after, num_periods))]
+
+
+def hn1_windows(num_periods: int, break_after: Optional[int]) -> List[Tuple[int, ...]]:
+    """Every 3-period window inside a single teaching segment, in order."""
+    windows = []
+    for seg in teaching_segments(num_periods, break_after):
+        for i in range(len(seg) - HN1_WINDOW + 1):
+            windows.append(tuple(seg[i:i + HN1_WINDOW]))
+    return windows
+
+
+def overlap_count(start: int, length: int, window: Iterable[int]) -> int:
+    """Period-weighted contribution of one block to one window: the number
+    of the block's covered periods lying inside the window. A length-2
+    theory block fully inside contributes 2; a length-3 block, 3."""
+    covered = set(covers(start, length))
+    return sum(1 for p in window if p in covered)
+
+
+def find_theory_streaks(theory_periods: Iterable[int], num_periods: int,
+                        break_after: Optional[int]) -> List[Tuple[int, ...]]:
+    """theory_periods: periods occupied by THEORY for one section on one day
+    (labs and free periods simply absent). Returns the sorted violating
+    3-period windows fully covered by theory (empty == valid)."""
+    occ = set(theory_periods)
+    return [w for w in hn1_windows(num_periods, break_after)
+            if all(p in occ for p in w)]
+
+
+def check_max_two_theory(theory_periods: Iterable[int], num_periods: int,
+                         break_after: Optional[int], section_label: str = "?",
+                         day: str = "?", section_id=None,
+                         extra_details: Optional[Dict] = None) -> List[RuleResult]:
+    """HN1: one RuleResult per violating window (empty list == valid)."""
+    results = []
+    for w in find_theory_streaks(theory_periods, num_periods, break_after):
+        details = {"section_id": section_id, "section": section_label,
+                   "day": day, "periods": list(w), "window": list(w)}
+        if extra_details:
+            details.update(extra_details)
+        results.append(_fail(
+            "MAX_TWO_THEORY",
+            f"Section '{section_label}' has theory in periods "
+            f"{w[0]}, {w[1]}, {w[2]} on {day} "
+            f"(at most two consecutive theory periods allowed).",
+            details,
+        ))
     return results

@@ -12,7 +12,8 @@ this module provides ONLY the reusable infrastructure:
 * `snapshot_without()` — returns a copy with one class's contribution
   removed (lets a move/swap validate against "everyone except me");
 * `validate_candidate()` — checks one hypothetical placement against the
-  snapshot using ONLY existing rules from `schedule_rules` (H2–H11).
+  snapshot using ONLY existing rules from `schedule_rules` (H2–H11) plus
+  HN1 (Phase 6D: max two consecutive theory periods per section/day).
 
 Explicitly OUT OF SCOPE for 6C: endpoints, locked blocks,
 specializations, preferences, HN-rules. No Flask/HTTP/SQLAlchemy imports
@@ -49,6 +50,10 @@ class ScheduleSnapshot:
     room_occ: Dict = field(default_factory=dict)
     faculty_occ: Dict = field(default_factory=dict)
     group_occ: Dict = field(default_factory=dict)
+    # HN1: (section group_key, day, period) -> theory count. Only
+    # whole-section THEORY placements are recorded here; practicals never
+    # count toward the consecutive-theory streak.
+    theory_occ: Dict = field(default_factory=dict)
 
 
 def _group_info(session_type: str, section_id, section_name: str, section_size: int,
@@ -124,6 +129,10 @@ def build_snapshot(days: List[str], num_periods: int, break_after: Optional[int]
                             sc.start_period, sc.length)
         rules.add_placement(snap.group_occ, info["group_key"], sc.day,
                             sc.start_period, sc.length)
+        if info.get("session_type") == "theory":
+            # HN1 footprint: theory occupancy per section/day/period.
+            rules.add_placement(snap.theory_occ, info["group_key"], sc.day,
+                                sc.start_period, sc.length)
         parent = info.get("parent_section_key")
         if parent:
             # H8 footprint: a lab-group practical also occupies its parent
@@ -146,7 +155,10 @@ def snapshot_without(snap: ScheduleSnapshot, class_id: int) -> ScheduleSnapshot:
                          (clone.faculty_occ,
                           (info["faculty_id"], day, p) if info else None),
                          (clone.group_occ,
-                          (info["group_key"], day, p) if info else None)):
+                          (info["group_key"], day, p) if info else None),
+                         (clone.theory_occ,
+                          (info["group_key"], day, p)
+                          if info and info.get("session_type") == "theory" else None)):
             if key is None:
                 continue
             occ[key] = occ.get(key, 1) - 1
@@ -169,7 +181,9 @@ def validate_candidate(snap: ScheduleSnapshot, *, session_type: str, group_key: 
 
     Returns a list of failing RuleResults (empty == valid). Covers H2/H3/H4
     (room compatibility), H5/H6/H7/H8 (occupancy incl. parent-section
-    footprint), H9 (faculty availability), H10/H11/H13 (geometry + day).
+    footprint), H9 (faculty availability), H10/H11/H13 (geometry + day),
+    and HN1 (max two consecutive theory periods for the candidate's
+    section/day — theory candidates only; practicals contribute 0).
     H1/H12/H14 are input/coverage-level rules and are not per-placement
     checks here.
     """
@@ -235,4 +249,22 @@ def validate_candidate(snap: ScheduleSnapshot, *, session_type: str, group_key: 
                             f"practical on {day} at period {p}.",
                     details={"group": group_key, "day": day, "period": p}))
                 break
+    if session_type == "theory" and group_key.startswith("section:"):
+        # HN1: the candidate's covered periods join the section's existing
+        # theory occupancy for the day; any fully-covered 3-period
+        # in-segment window is a violation. Practical candidates skip this
+        # (labs contribute 0 to the theory streak).
+        try:
+            section_id = int(group_key.split(":", 1)[1])
+        except (ValueError, IndexError):
+            section_id = None
+        occupied = {p for (k, d, p) in snap.theory_occ
+                    if k == group_key and d == day}
+        occupied.update(rules.covers(start_period, length))
+        for res in rules.check_max_two_theory(
+                occupied, snap.num_periods, snap.break_after,
+                group_label, day, section_id,
+                extra_details={"room_id": room_id, "faculty_id": faculty_id,
+                               "group": group_key}):
+            failures.append(res)
     return failures
