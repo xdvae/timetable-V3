@@ -36,6 +36,16 @@ import itertools
 import time
 from ortools.sat.python import cp_model
 
+# Phase 6C: logical rule definitions live in backend/schedule_rules.py.
+# The CP-SAT encoding below is unchanged; the helpers are used for domain
+# pruning, and each linear-constraint block notes which logical rule it
+# mirrors (predicates can never replace CP-SAT expressions — see Part 4).
+from backend.schedule_rules import (
+    check_room_compatible,
+    is_faculty_available,
+    valid_starts as rule_valid_starts,
+)
+
 
 def expand_sessions(assignments):
     """Turn TeachingAssignment rows into a flat list of session dicts."""
@@ -69,28 +79,24 @@ def expand_sessions(assignments):
 
 
 def compatible_rooms(session, rooms):
-    wanted_type = "lab" if session["session_type"] == "practical" else "theory"
+    # Phase 6C: per-room legality delegates to schedule_rules
+    # (H2 room capacity + H3 room type + H4 lab equipment). Order and
+    # semantics are unchanged: rooms are returned in input order.
     out = []
     for r in rooms:
-        if r.room_type != wanted_type:
-            continue
-        if r.capacity < session["group_size"]:
-            continue
-        if wanted_type == "lab" and r.equipment_count is not None and r.equipment_count < session["group_size"]:
-            continue
-        out.append(r)
+        if check_room_compatible(
+            r.room_type, r.capacity, r.equipment_count,
+            session["session_type"], session["group_size"],
+            room_name=r.name, group_label=session["group_label"],
+        ).ok:
+            out.append(r)
     return out
 
 
 def valid_starts(length, num_periods, break_after):
     """Start periods where a block of `length` fits without crossing the lunch break."""
-    starts = []
-    for start in range(0, num_periods - length + 1):
-        end = start + length  # exclusive
-        if break_after is not None and start < break_after < end:
-            continue  # would span the break
-        starts.append(start)
-    return starts
+    # Phase 6C: single definition now lives in schedule_rules (H10+H11).
+    return rule_valid_starts(length, num_periods, break_after)
 
 
 def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
@@ -129,8 +135,8 @@ def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
         unavail = faculty_unavailable.get(sess["faculty_id"], set())
         for day in days:
             for start in starts:
-                covers = range(start, start + sess["length"])
-                if any(f"{day}:{p}" in unavail for p in covers):
+                # Phase 6C: H9 faculty-availability pruning via shared rule.
+                if not is_faculty_available(unavail, day, start, sess["length"]):
                     continue
                 for room in rooms_ok:
                     var = model.NewBoolVar(f"x_{s_idx}_{day}_{start}_{room.id}")
@@ -144,6 +150,8 @@ def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
                 f"'{sess['group_label']}' ({sess['subject_id']}) has no legal "
                 f"day/period/room slot at all — check faculty availability and room setup."
             )
+        # H1 (schedule_rules.check_session_coverage is the logical counterpart):
+        # every session is placed exactly once.
         model.Add(sum(x[(s_idx, d, st, r)] for (d, st, r) in opts) == 1)
 
     # ---- Resource occupancy expressions per (resource, day, period) ----
@@ -163,18 +171,22 @@ def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
             var = x[(s_idx, d, start, r)]
             for p in range(start, start + sess["length"]):
                 room_occ.setdefault((r, d, p), []).append(var)
+    # H5 (logical counterpart: schedule_rules.check_no_overlap over room occupancy).
     for key, vlist in room_occ.items():
         model.Add(sum(vlist) <= 1)
 
     fac_occ = build_occupancy(lambda sess: sess["faculty_id"])
+    # H6 (logical counterpart: schedule_rules.check_no_overlap over faculty occupancy).
     for key, vlist in fac_occ.items():
         model.Add(sum(vlist) <= 1)
 
     group_occ = build_occupancy(lambda sess: sess["group_key"])
+    # H7 (logical counterpart: schedule_rules.check_no_overlap over group occupancy).
     for key, vlist in group_occ.items():
         model.Add(sum(vlist) <= 1)
 
     # ---- Section <-> its lab groups must never overlap ----
+    # H8 (logical counterpart: schedule_rules.find_hierarchy_overlaps).
     # (a lab group's session and a whole-section theory session would
     # otherwise be allowed to run at the same time, which is impossible
     # since the lab group's students are also section students)
@@ -191,6 +203,9 @@ def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
                 model.Add(sum(child_vars) + sum(parent_vars) <= 1)
 
     # ---- Faculty consecutive-teaching / break constraint ----
+    # H12 (logical counterpart: schedule_rules.check_faculty_consecutive; the
+    # window-sum formulation over binary occupancy is equivalent to a
+    # longest-run check).
     if max_consecutive and max_consecutive > 0:
         window = max_consecutive + 1
         fac_ids = {sess["faculty_id"] for sess in sessions}

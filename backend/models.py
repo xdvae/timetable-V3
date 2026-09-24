@@ -77,8 +77,13 @@ class Section(db.Model):
     enrollment_id = db.Column(db.Integer, db.ForeignKey("enrollment.id"), nullable=False)
     name = db.Column(db.String(80), nullable=False)  # e.g. "BCA-1-A"
     student_count = db.Column(db.Integer, nullable=False)
+    # Phase 6C (additive, unused by the scheduler until Phase 6G): soft
+    # "home room" preference for ordinary theory classes. Nullable so no
+    # existing section is affected; never a reservation (see Phase 6B §8).
+    preferred_theory_room_id = db.Column(db.Integer, db.ForeignKey("room.id"), nullable=True)
 
     enrollment = db.relationship("Enrollment")
+    preferred_theory_room = db.relationship("Room")
 
 
 class LabGroup(db.Model):
@@ -157,9 +162,149 @@ class ScheduledClass(db.Model):
     length = db.Column(db.Integer, nullable=False)
     room_id = db.Column(db.Integer, db.ForeignKey("room.id"), nullable=False)
     run_id = db.Column(db.String(40))  # groups results from one solver run so we can clear/replace
+    # Phase 6C (additive, unused until later phases): lock/slot anchors.
+    # is_locked defaults false so every existing row stays logically identical.
+    is_locked = db.Column(db.Boolean, nullable=False, default=False, server_default="0")
+    slot_id = db.Column(db.Integer, db.ForeignKey("specialization_slot.id"), nullable=True)
+    locked_block_id = db.Column(db.Integer, db.ForeignKey("locked_block.id"), nullable=True)
 
     assignment = db.relationship("TeachingAssignment")
     room = db.relationship("Room")
+    slot = db.relationship("SpecializationSlot")
+    locked_block = db.relationship("LockedBlock")
+
+
+# ---------------------------------------------------------------------------
+# Phase 6C additive schema (design: Phase 6B report §§5-9).
+# New tables only; nothing here is populated or consumed by the scheduler,
+# the API, or the audit in this phase. All relationships avoid delete
+# cascades (matching the existing codebase style); deletions that would
+# orphan rows must be guarded at the application layer in later phases.
+# ---------------------------------------------------------------------------
+
+class Specialization(db.Model):
+    """A cross-section student grouping (e.g. Cyber Security for BCA-3).
+
+    Students are NOT individual rows: membership headcounts per originating
+    section live on SpecializationMembership, preserving each section's
+    contribution (Phase 6B §6)."""
+    __tablename__ = "specialization"
+    __table_args__ = (db.UniqueConstraint("name", "enrollment_id",
+                                          name="uq_specialization_name_enrollment"),)
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False)  # e.g. "Cyber Security"
+    enrollment_id = db.Column(db.Integer, db.ForeignKey("enrollment.id"), nullable=False)
+    session_type = db.Column(db.String(20), nullable=False, default="theory")  # theory | practical
+    block_length = db.Column(db.Integer, nullable=False, default=1)
+    periods_per_week = db.Column(db.Integer, nullable=False)
+
+    enrollment = db.relationship("Enrollment")
+    memberships = db.relationship("SpecializationMembership",
+                                  back_populates="specialization",
+                                  cascade="all, delete-orphan")
+    slots = db.relationship("SpecializationSlot",
+                            back_populates="specialization",
+                            cascade="all, delete-orphan")
+
+
+class SpecializationMembership(db.Model):
+    """Headcount of one section's students in one specialization."""
+    __tablename__ = "specialization_membership"
+    __table_args__ = (
+        db.UniqueConstraint("specialization_id", "section_id",
+                            name="uq_spec_membership_spec_section"),
+        db.CheckConstraint("student_count > 0", name="ck_spec_membership_positive"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    specialization_id = db.Column(db.Integer, db.ForeignKey("specialization.id"),
+                                 nullable=False)
+    section_id = db.Column(db.Integer, db.ForeignKey("section.id"), nullable=False)
+    student_count = db.Column(db.Integer, nullable=False)
+
+    specialization = db.relationship("Specialization", back_populates="memberships")
+    section = db.relationship("Section")
+
+
+class SpecializationSlot(db.Model):
+    """One synchronized common time window for a specialization (Phase 6B HN3).
+
+    Member classes (future phases) reference the slot; rooms/faculty may
+    differ per class but (day, start_period, length) is shared."""
+    __tablename__ = "specialization_slot"
+
+    id = db.Column(db.Integer, primary_key=True)
+    specialization_id = db.Column(db.Integer, db.ForeignKey("specialization.id"),
+                                 nullable=False)
+    day = db.Column(db.String(10), nullable=False)
+    start_period = db.Column(db.Integer, nullable=False)
+    length = db.Column(db.Integer, nullable=False, default=1)
+
+    specialization = db.relationship("Specialization", back_populates="slots")
+
+
+class LockedBlock(db.Model):
+    """Generalized immutable scheduling input (Phase 6B §7).
+
+    kind='interdepartment' covers externally-controlled classes (pinned time
+    + teacher; room optional); 'manual_fix' / 'admin_override' cover future
+    admin-pinned blocks. The scheduler consumes these as fixed occupancy in
+    a later phase — not in 6C."""
+    __tablename__ = "locked_block"
+
+    id = db.Column(db.Integer, primary_key=True)
+    kind = db.Column(db.String(30), nullable=False, default="interdepartment")
+    # interdepartment | manual_fix | admin_override
+    subject_id = db.Column(db.Integer, db.ForeignKey("subject.id"), nullable=False)
+    faculty_id = db.Column(db.Integer, db.ForeignKey("faculty.id"), nullable=False)
+    section_id = db.Column(db.Integer, db.ForeignKey("section.id"), nullable=True)
+    lab_group_id = db.Column(db.Integer, db.ForeignKey("lab_group.id"), nullable=True)
+    day = db.Column(db.String(10), nullable=False)
+    start_period = db.Column(db.Integer, nullable=False)
+    length = db.Column(db.Integer, nullable=False, default=1)
+    room_id = db.Column(db.Integer, db.ForeignKey("room.id"), nullable=True)
+    room_locked = db.Column(db.Boolean, nullable=False, default=False, server_default="0")
+    department = db.Column(db.String(120), nullable=True)  # external owning department
+    is_external = db.Column(db.Boolean, nullable=False, default=True, server_default="1")
+    note = db.Column(db.Text, nullable=True)
+
+    subject = db.relationship("Subject")
+    faculty = db.relationship("Faculty")
+    section = db.relationship("Section")
+    lab_group = db.relationship("LabGroup")
+    room = db.relationship("Room")
+
+
+class FacultyPreference(db.Model):
+    """Optional soft (rarely hard) faculty scheduling preference (Phase 6B §9).
+
+    kinds: TIME_WINDOW (teach inside [start_period, end_period) on `days`),
+    SUBJECT_AFFINITY (prefer subject_id for section_id),
+    DAY_OFF_PREFERENCE (soft reward for no classes that day; distinct from
+    the hard unavailable_slots mechanism). New kinds need no schema change."""
+    __tablename__ = "faculty_preference"
+    __table_args__ = (
+        db.CheckConstraint("weight >= 1 AND weight <= 10",
+                           name="ck_faculty_preference_weight"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    faculty_id = db.Column(db.Integer, db.ForeignKey("faculty.id"), nullable=False)
+    kind = db.Column(db.String(30), nullable=False)
+    # TIME_WINDOW | SUBJECT_AFFINITY | DAY_OFF_PREFERENCE
+    subject_id = db.Column(db.Integer, db.ForeignKey("subject.id"), nullable=True)
+    section_id = db.Column(db.Integer, db.ForeignKey("section.id"), nullable=True)
+    days = db.Column(db.String(120), nullable=True)  # e.g. "Mon,Tue,Wed,Thu,Fri"
+    start_period = db.Column(db.Integer, nullable=True)
+    end_period = db.Column(db.Integer, nullable=True)  # exclusive
+    weight = db.Column(db.Integer, nullable=False, default=5)
+    is_hard = db.Column(db.Boolean, nullable=False, default=False, server_default="0")
+    enabled = db.Column(db.Boolean, nullable=False, default=True, server_default="1")
+
+    faculty = db.relationship("Faculty")
+    subject = db.relationship("Subject")
+    section = db.relationship("Section")
 
 
 class AdminUser(db.Model):
