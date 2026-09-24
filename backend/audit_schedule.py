@@ -7,11 +7,16 @@ no room/faculty/student-group double-bookings, no break violations, no
 capacity/equipment violations, and no faculty member over the
 consecutive-teaching limit.
 
-Usage: python audit_schedule.py
+Usage: python -m backend.audit_schedule (from the repository root)
 """
+import os
+import sys
 from collections import defaultdict
-from app import app, db
-from models import ScheduledClass, TeachingAssignment, Config, Room
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from backend.app import app, db
+from backend.models import ScheduledClass, TeachingAssignment, Config, Room
 
 with app.app_context():
     cfg = Config.query.first()
@@ -69,7 +74,7 @@ with app.app_context():
     # hierarchical check: a lab group's students are a subset of their
     # parent section, so a lab-group session must never overlap a
     # whole-section theory session
-    from models import LabGroup
+    from backend.models import LabGroup
     lg_sections = {lg.id: lg.section_id for lg in LabGroup.query.all()}
     section_theory_periods = defaultdict(set)   # section_id -> {(day, period)}
     labgroup_periods = defaultdict(set)         # lab_group_id -> {(day, period)}

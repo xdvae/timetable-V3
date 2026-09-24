@@ -8,9 +8,9 @@ HTML.
 
 The project has one browser frontend and one backend:
 
-- **Flask backend** (`app.py`, `api_routes.py`, `models.py`, `scheduler.py`, …) — the
-  scheduling engine, the database, the JSON API, file exports/sample downloads,
-  and (in production) the React static bundle.
+- **Flask backend** (`backend/app.py`, `backend/api_routes.py`, `backend/models.py`,
+  `backend/scheduler.py`, …) — the scheduling engine, the database, the JSON API,
+  file exports/sample downloads, and (in production) the React static bundle.
 - **React frontend** (`frontend/`) — the administrative UI, communicating with Flask
   over same-origin `/api/*` requests (plus same-origin export/download URLs).
 
@@ -46,14 +46,14 @@ React frontend (frontend/)
    │  same-origin /api/* (session cookie, no tokens)
    │  same-origin /export/* and /import/sample/* downloads
    ▼
-Flask (app.py)
-   ├── JSON API layer (api_routes.py)
+Flask (backend/app.py, served as backend.app:app)
+   ├── JSON API layer (backend/api_routes.py)
    ├── Export / sample-download routes
    ├── React production bundle (frontend/dist/, SPA fallback)
    │
-   ├── SQLAlchemy / database (models.py, instance/timetable.db)
+   ├── SQLAlchemy / database (backend/models.py, backend/instance/timetable.db)
    │
-   └── Scheduler / OR-Tools (scheduler.py)
+   └── Scheduler / OR-Tools (backend/scheduler.py)
 ```
 
 The React application is the browser frontend. The Flask application exposes the JSON
@@ -66,27 +66,31 @@ the backend produces.
 ## Project Structure
 
 ```text
-app.py              Flask application (API + export/sample-download routes +
-                    React production-bundle serving)
-api_routes.py       JSON API layer (/api/*) for the React frontend
-helpers.py          Shared timetable helpers (section splitting, timetable-view
-                    queries/titles, export cell text) used by app.py and api_routes.py
-models.py           SQLAlchemy models (Config, Room, Faculty, Program,
-                    Enrollment, Section, LabGroup, Subject,
-                    TeachingAssignment, ScheduledClass, AdminUser)
-scheduler.py        OR-Tools CP-SAT scheduling engine (untouched by frontend work)
-validators.py       Shared validation/normalization (e.g. room names)
-csv_import.py       Rooms + workload CSV import pipeline
-export.py           Timetable export builders (CSV / HTML / XLSX grids)
-seed_demo.py        Loads sample_data/ through the real CSV import pipeline
-backup.py           Timestamped SQLite backups for scheduled jobs
-audit_schedule.py   Standalone checker that re-verifies a generated schedule
-requirements.txt    Pinned Python dependencies
-Procfile            gunicorn entrypoint for hosting platforms
-.env.example        Documented environment variables (safe to commit)
-instance/           Local application state (see Database)
-sample_data/        rooms_sample.csv + workload_sample.csv
-frontend/           React application (see Frontend)
+UniSchedule/
+├── backend/
+│   ├── app.py           Flask application (API + export/sample-download routes +
+│   │                     React production-bundle serving); served as backend.app:app
+│   ├── api_routes.py    JSON API layer (/api/*) for the React frontend
+│   ├── helpers.py       Shared timetable helpers (section splitting, timetable-view
+│   │                     queries/titles, export cell text) used by backend/app.py
+│   │                     and backend/api_routes.py
+│   ├── models.py        SQLAlchemy models (Config, Room, Faculty, Program,
+│   │                     Enrollment, Section, LabGroup, Subject,
+│   │                     TeachingAssignment, ScheduledClass, AdminUser)
+│   ├── scheduler.py     OR-Tools CP-SAT scheduling engine (untouched by frontend work)
+│   ├── validators.py    Shared validation/normalization (e.g. room names)
+│   ├── csv_import.py    Rooms + workload CSV import pipeline
+│   ├── export.py        Timetable export builders (CSV / HTML / XLSX grids)
+│   ├── seed_demo.py     Loads backend/sample_data/ through the real CSV import pipeline
+│   ├── backup.py        Timestamped SQLite backups for scheduled jobs
+│   ├── audit_schedule.py Standalone checker that re-verifies a generated schedule
+│   ├── requirements.txt Pinned Python dependencies
+│   ├── sample_data/     rooms_sample.csv + workload_sample.csv
+│   └── instance/        Local application state (see Database)
+├── frontend/            React application (see Frontend)
+├── Procfile             gunicorn entrypoint for hosting platforms (backend.app:app)
+├── .env.example         Documented environment variables (safe to commit)
+└── README.md
 ```
 
 ```text
@@ -117,7 +121,7 @@ frontend/
 
 ## Backend
 
-### Flask application (`app.py`)
+### Flask application (`backend/app.py`)
 
 Owns the HTTP layer: the JSON API blueprint, timetable file exports
 (`/export/<view>/<id>/<fmt>`), sample CSV downloads (`/import/sample/<kind>`), and
@@ -126,7 +130,7 @@ serving the React production bundle with an SPA fallback. Shared timetable helpe
 routes and the API use one implementation. Authentication is enforced globally: every
 backend route except the API login and the React shell requires a signed-in session.
 
-### API layer (`api_routes.py`)
+### API layer (`backend/api_routes.py`)
 
 A Blueprint exposing the data and outcomes as JSON, reusing the existing queries,
 helpers, and scheduler invocation — no duplicated business rules. Unauthenticated API
@@ -153,7 +157,7 @@ directly.
 
 ## Scheduling Engine
 
-`scheduler.py` expands each teaching assignment into session blocks and places them with
+`backend/scheduler.py` expands each teaching assignment into session blocks and places them with
 OR-Tools CP-SAT subject to hard constraints — room type/capacity/equipment match, no
 room/faculty/student-group double-booking, lab-group sessions never overlapping their parent
 section's theory, no block spanning the lunch break, faculty availability, and a maximum
@@ -214,7 +218,7 @@ use the same-origin download routes).
 - [x] Responsive application shell
 - [x] Authentication (`/login` sign-in form, `GET /api/me`, `RequireAuth`, `?next=`)
 - [x] Centralized API client
-- [x] Flask JSON API layer (`api_routes.py`)
+- [x] Flask JSON API layer (`backend/api_routes.py`)
 
 ### Implemented React pages (real data)
 
@@ -243,8 +247,8 @@ Backend (from the repository root):
 python -m venv venv
 # Windows: venv\Scripts\activate
 # macOS/Linux: source venv/bin/activate
-pip install -r requirements.txt
-python app.py
+pip install -r backend/requirements.txt
+python -m backend.app
 ```
 
 The backend serves on `http://127.0.0.1:5050`. On first run it creates the SQLite database and
@@ -265,7 +269,7 @@ Production (single process, same origin):
 
 ```bash
 cd frontend && npm install && npm run build
-cd .. && gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 90
+cd .. && gunicorn backend.app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 90
 ```
 
 Flask serves `frontend/dist/` (git-ignored build output) with an SPA fallback: unknown
@@ -276,11 +280,11 @@ downloads. If `dist/` has not been built, browser hits 404 but the API is unaffe
 Demo data (optional, exercises the real import pipeline):
 
 ```bash
-python seed_demo.py
+python -m backend.seed_demo
 ```
 
-Or use the Import page with `sample_data/rooms_sample.csv` and
-`sample_data/workload_sample.csv`, then Timetable → Generate Timetable.
+Or use the Import page with `backend/sample_data/rooms_sample.csv` and
+`backend/sample_data/workload_sample.csv`, then Timetable → Generate Timetable.
 
 ## Environment Configuration
 
@@ -289,27 +293,27 @@ committed). Variables: `SECRET_KEY` (signs session cookies; required in any real
 `INSTITUTION_NAME` (shown on the dashboard), `ADMIN_USERNAME` / `ADMIN_PASSWORD` (first
 login; a random password is generated and printed once if unset), and optionally
 `DATABASE_URL` (defaults to the local SQLite file; a Postgres URL is supported for more
-durable deployments). The checked-in `instance/timetable.db` is intentional demo state (see
+durable deployments). The checked-in `backend/instance/timetable.db` is intentional demo state (see
 Database) — it is already tracked in Git, so ignore rules below do not remove it.
 
 ## Database
 
-Local development uses SQLite. The default file lives under `instance/` (see
-`SQLALCHEMY_DATABASE_URI` in `app.py`; `DATABASE_URL` overrides it). `instance/timetable.db`
-is currently tracked in Git as the project's demo state — do not delete it, and point
-`DATABASE_URL` elsewhere if you want a scratch database. Any *new* `*.db` / `*.sqlite` files
-are ignored by the root `.gitignore`. Schema changes go through `models.py`; there is no
-migration tooling — deleting the SQLite file and re-running recreates an empty schema.
+Local development uses SQLite. The default file lives under `backend/instance/` (see
+`SQLALCHEMY_DATABASE_URI` in `backend/app.py`; `DATABASE_URL` overrides it).
+`backend/instance/timetable.db` is currently tracked in Git as the project's demo state — do not
+delete it, and point `DATABASE_URL` elsewhere if you want a scratch database. Any *new* `*.db` /
+`*.sqlite` files are ignored by the root `.gitignore`. Schema changes go through `backend/models.py`;
+there is no migration tooling — deleting the SQLite file and re-running recreates an empty schema.
 
 ## CSV Import
 
-Two formats, handled by `csv_import.py` (also reachable as structured JSON via
+Two formats, handled by `backend/csv_import.py` (also reachable as structured JSON via
 `POST /api/import/rooms` and `POST /api/import/workload`):
 
-- **Rooms CSV** (`sample_data/rooms_sample.csv`): `name, room_type (theory/lab), capacity,
+- **Rooms CSV** (`backend/sample_data/rooms_sample.csv`): `name, room_type (theory/lab), capacity,
   equipment_count` — equipment optional, labs only. Names normalize to one canonical form;
   re-uploads update in place.
-- **Workload CSV** (`sample_data/workload_sample.csv`): one row per teaching assignment —
+- **Workload CSV** (`backend/sample_data/workload_sample.csv`): one row per teaching assignment —
   `program, year_label, section, total_students, faculty_name, faculty_type, subject_code,
   subject_name, session_type (theory/practical), credits, periods_per_week, block_length`.
   Sections are created exactly as named; lab groups auto-generate from config; a practical row
@@ -317,7 +321,7 @@ Two formats, handled by `csv_import.py` (also reachable as structured JSON via
 
 ## Export
 
-`export.py` builds day × period grids (single view per file) served by `/export/*`
+`backend/export.py` builds day × period grids (single view per file) served by `/export/*`
 routes, which the React app calls directly:
 
 - **Excel** (`.xlsx`, styled workbook) — download
@@ -331,11 +335,11 @@ room at a time).
 
 ### Backend preservation
 
-`scheduler.py`, `models.py`, `validators.py`, `csv_import.py`, `export.py`, the database
-schema, and the API contracts must not change unless strictly required for
-React/backend connectivity or application integrity. All React work lives under `frontend/`.
-The API layer (`api_routes.py`) plus shared `helpers.py` is the sanctioned bridge — extend
-it rather than editing business logic.
+`backend/scheduler.py`, `backend/models.py`, `backend/validators.py`, `backend/csv_import.py`,
+`backend/export.py`, the database schema, and the API contracts must not change unless strictly
+required for React/backend connectivity or application integrity. All React work lives under
+`frontend/`. The API layer (`backend/api_routes.py`) plus shared `backend/helpers.py` is the
+sanctioned bridge — extend it rather than editing business logic.
 
 ### Frontend rules
 
@@ -355,10 +359,10 @@ data-fetching, or styling libraries without a concrete, recorded need.
 ## Contributing
 
 1. Create a branch from the current migration branch.
-2. Backend: `pip install -r requirements.txt`. Frontend: `cd frontend && npm install`.
+2. Backend: `pip install -r backend/requirements.txt`. Frontend: `cd frontend && npm install`.
 3. Make your changes (frontend work stays in `frontend/`).
 4. Run `npm run lint` and `npm run build`; for backend changes, run the app and
-   `python audit_schedule.py` after generating a timetable. (There is no automated test
+   `python -m backend.audit_schedule` after generating a timetable. (There is no automated test
    suite; verification is manual — say what you ran in the PR.)
 5. Inspect `git status` and `git diff --name-only`; confirm no unintended files.
 6. Submit a PR describing behavior changes and verification steps.
@@ -374,5 +378,6 @@ License: not currently specified (no LICENSE file in the repository).
 - Production is a single gunicorn process serving both the API and the React build
   (see Local Development); split static hosting is not currently configured.
 - The checked-in demo database does not currently regenerate cleanly end-to-end
-  (`audit_schedule.py` reports break-spanning lab blocks against the current config), so
-  treat generation results on the demo dataset as illustrative until the data is refreshed.
+  (`python -m backend.audit_schedule` reports break-spanning lab blocks against the current
+  config), so treat generation results on the demo dataset as illustrative until the data
+  is refreshed.

@@ -1,17 +1,39 @@
 import os
 import secrets
+import sys
 from dotenv import load_dotenv
+
+# This module now lives in backend/, so the repository root is its parent
+# directory. Ensure the root stays importable however the app is launched
+# (gunicorn backend.app:app, python -m backend.app, or python backend/app.py).
+_BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+_ROOT_DIR = os.path.dirname(_BACKEND_DIR)
+if _ROOT_DIR not in sys.path:
+    sys.path.insert(0, _ROOT_DIR)
+
 load_dotenv()
+# If the process was started with backend/ as the working directory, the
+# call above finds no .env; fall back to the repository-root .env so the
+# same environment configuration loads as before the move. Existing
+# environment variables are never overridden.
+if os.path.isfile(os.path.join(_ROOT_DIR, ".env")):
+    load_dotenv(os.path.join(_ROOT_DIR, ".env"))
 
 from flask import Flask, request, send_file, abort
 from flask_login import LoginManager, current_user
 
-from models import db, init_db, Config, AdminUser
-from helpers import (_cfg_days_periods, cell_text_plain, get_view_classes,
-                     view_title)
-import export as exp
+from backend.models import db, init_db, Config, AdminUser
+from backend.helpers import (_cfg_days_periods, cell_text_plain, get_view_classes,
+                             view_title)
+from backend import export as exp
 
-app = Flask(__name__)
+# Explicit instance path: Flask would otherwise default to <repo-root>/instance
+# for the "backend.app" import name, but the database lives in
+# backend/instance/ after the reorganization. Pinning this keeps the
+# default sqlite:///timetable.db URI resolving to backend/instance/timetable.db
+# exactly as instance/timetable.db did before the move.
+os.makedirs(os.path.join(_BACKEND_DIR, "instance"), exist_ok=True)
+app = Flask(__name__, instance_path=os.path.join(_BACKEND_DIR, "instance"))
 
 # ---------------------------------------------------------------------------
 # Phase 1 deployment config — everything below is read from environment
@@ -140,7 +162,9 @@ def export_view(view, obj_id, fmt):
 # /api to Flask instead, so a missing dist/ only affects direct browser
 # hits here — never the API, export, or sample-download routes, which are
 # concrete rules and always take precedence over this catch-all.
-DIST_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend", "dist")
+# NOTE: backend/ holds the Flask code while frontend/ stays at the repo
+# root, so the bundle lives one directory above this file.
+DIST_DIR = os.path.join(_ROOT_DIR, "frontend", "dist")
 
 
 @app.route("/", defaults={"path": ""}, methods=["GET"])
@@ -165,7 +189,7 @@ def serve_react(path):
 # JSON API for the React frontend (see api_routes.py). Registers /api/*
 # routes; the download routes above (export + sample CSVs) stay on Flask
 # because React calls them directly as same-origin downloads.
-from api_routes import init_api
+from backend.api_routes import init_api
 init_api(app, login_manager)
 
 

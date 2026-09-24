@@ -16,13 +16,13 @@ from flask import Blueprint, jsonify, request
 from flask_login import login_user, logout_user, login_required, current_user
 from sqlalchemy import func
 
-from models import (db, Config, Room, Faculty, Program, Enrollment,
-                    Section, LabGroup, Subject, TeachingAssignment,
-                    ScheduledClass, AdminUser)
-from scheduler import run_scheduler
-import export as exp
-import csv_import
-from validators import normalize_room_name, RoomNameError
+from backend.models import (db, Config, Room, Faculty, Program, Enrollment,
+                            Section, LabGroup, Subject, TeachingAssignment,
+                            ScheduledClass, AdminUser)
+from backend.scheduler import run_scheduler
+from backend import export as exp
+from backend import csv_import
+from backend.validators import normalize_room_name, RoomNameError
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
 
@@ -449,7 +449,7 @@ def api_timetable_home():
 @login_required
 def api_timetable_view(view, obj_id):
     # Reuse the shared timetable query helper so filtering semantics are identical.
-    from helpers import get_view_classes
+    from backend.helpers import get_view_classes
     title = _view_title_json(view, obj_id)
     cfg = _get_config()
     days, periods = cfg.day_list(), cfg.period_list()
@@ -619,7 +619,7 @@ def api_program_delete(pid):
 def api_enrollment_create():
     # Same auto-generation as the Jinja enrollments form (sections split
     # evenly, letters A.., lab groups per section). Reuses helpers.split_evenly.
-    from helpers import split_evenly, letters
+    from backend.helpers import split_evenly, letters
     data = _data()
     cfg = _get_config()
     program_id = _required_int(data, "program_id")

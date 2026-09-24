@@ -1,6 +1,6 @@
 # ============================================================
 # UniSchedule — root ignore rules (Python/Flask + Node/Vite/React)
-# NOTE: instance/timetable.db is already tracked in Git as intentional
+# NOTE: backend/instance/timetable.db is already tracked in Git as intentional
 # demo state. Ignore rules below do not untrack it; do not delete it.
 # ============================================================
 
@@ -59,15 +59,15 @@ frontend/.eslintcache
 
 # ---------- Python / Flask generated files ----------
 *.log
-instance/*.log
+backend/instance/*.log
 
 # ---------- SQLite ----------
 # New local database copies stay out of Git. The already-tracked
-# instance/timetable.db is preserved by the negation below.
+# backend/instance/timetable.db is preserved by the negation below.
 *.db
 *.sqlite
 *.sqlite3
-!instance/timetable.db
+!backend/instance/timetable.db
 
 # ---------- Backups ----------
 backups/

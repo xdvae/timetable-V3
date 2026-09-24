@@ -9,8 +9,8 @@ same signatures, same queries, same output.
 """
 from flask import abort
 
-from models import (db, Config, Room, Faculty, Section, LabGroup,
-                    TeachingAssignment, ScheduledClass)
+from backend.models import (db, Config, Room, Faculty, Section, LabGroup,
+                            TeachingAssignment, ScheduledClass)
 
 
 def get_config():

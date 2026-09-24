@@ -5,16 +5,20 @@ sample_data/workload_sample.csv through the real CSV import pipeline
 end-to-end test of that feature with a realistic, full-size dataset:
 4 programs (BCA, BSc IT, BCS, Btech CSE), 9 subjects each, ~20 faculty.
 
-Run once: python seed_demo.py
+Run once: python -m backend.seed_demo (from the repository root)
 """
 import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 os.environ.setdefault("ADMIN_USERNAME", "admin")
 os.environ.setdefault("ADMIN_PASSWORD", "demo-admin-2026")
 
 import io
-from app import app, db, init_admin_from_env
-from models import Config
-import csv_import
+from backend.app import app, db, init_admin_from_env
+from backend.models import Config
+from backend import csv_import
 
 with app.app_context():
     db.drop_all()
@@ -40,13 +44,13 @@ with app.app_context():
         def read(self):
             return self._f.read()
 
-    room_counts, room_errors = csv_import.import_rooms_csv(FileWrapper("sample_data/rooms_sample.csv"))
+    room_counts, room_errors = csv_import.import_rooms_csv(FileWrapper("backend/sample_data/rooms_sample.csv"))
     print("Rooms:", room_counts, "errors:", room_errors)
 
-    load_counts, load_errors = csv_import.import_workload_csv(FileWrapper("sample_data/workload_sample.csv"), cfg)
+    load_counts, load_errors = csv_import.import_workload_csv(FileWrapper("backend/sample_data/workload_sample.csv"), cfg)
     print("Workload:", load_counts, "errors:", load_errors)
 
-    from models import Section, LabGroup, Faculty, Subject, TeachingAssignment, Program
+    from backend.models import Section, LabGroup, Faculty, Subject, TeachingAssignment, Program
     print("\nPrograms:", Program.query.count())
     print("Sections:", [(s.name, s.student_count) for s in Section.query.all()])
     print("Lab groups:", [(lg.name, lg.student_count) for lg in LabGroup.query.all()])

@@ -4,7 +4,7 @@ Backs up the SQLite database to a timestamped file in ./backups/.
 Run this on a schedule (cron, or your hosting platform's scheduled job
 feature) — daily is a sane minimum once a real customer's data is in here.
 
-    python backup.py
+    python -m backend.backup   (from the repository root)
 
 To actually protect against server loss (not just local disk mistakes),
 point the destination at off-server storage instead of leaving backups
@@ -27,8 +27,14 @@ import shutil
 import sys
 from datetime import datetime, timezone
 
-DB_PATH = os.environ.get("SQLITE_DB_PATH", "instance/timetable.db")
-BACKUP_DIR = os.environ.get("BACKUP_DIR", "backups")
+DB_PATH = os.environ.get(
+    "SQLITE_DB_PATH",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "instance", "timetable.db"),
+)
+BACKUP_DIR = os.environ.get(
+    "BACKUP_DIR",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backups"),
+)
 KEEP_LAST = int(os.environ.get("BACKUP_KEEP_LAST", "30"))  # prune older backups
 
 

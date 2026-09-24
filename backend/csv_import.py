@@ -4,9 +4,9 @@ import io
 import math
 from collections import defaultdict
 
-from models import (db, Room, Faculty, Program, Enrollment, Section,
-                     LabGroup, Subject, TeachingAssignment)
-from validators import normalize_room_name, RoomNameError
+from backend.models import (db, Room, Faculty, Program, Enrollment, Section,
+                             LabGroup, Subject, TeachingAssignment)
+from backend.validators import normalize_room_name, RoomNameError
 
 
 def _split_evenly(total, n):
