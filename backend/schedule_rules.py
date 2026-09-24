@@ -381,3 +381,53 @@ def check_max_two_theory(theory_periods: Iterable[int], num_periods: int,
             details,
         ))
     return results
+
+
+# ----------------- HN1 capacity & demand primitives (Phase 6D.1)
+# Pure planning helpers: how much theory a section-day/week can hold under
+# HN1, and how much theory each section demands. Used by diagnostics and
+# (in future) capacity pre-checks; never part of constraint enforcement.
+def segment_theory_capacity(segment_length: int) -> int:
+    """Max theory periods placeable in one contiguous segment of length L
+    without three consecutive theory periods.
+
+    Optimal pattern repeats T,T,F: every full group of 3 holds 2 theory,
+    remainders hold fully. Closed form: L - L//3.
+    (L=3->2, L=4->3, L=5->4, L=6->4, L=7->5, L<=0->0.)
+    """
+    if segment_length <= 0:
+        return 0
+    return segment_length - segment_length // 3
+
+
+def hn1_daily_capacity(num_periods: int, break_after: Optional[int]) -> int:
+    """Max theory periods one section can hold in one day under HN1:
+    sum of segment capacities (windows never cross the break)."""
+    return sum(segment_theory_capacity(len(seg))
+               for seg in teaching_segments(num_periods, break_after))
+
+
+def hn1_weekly_capacity(num_periods: int, break_after: Optional[int],
+                        num_days: int) -> int:
+    """Max theory periods one section can hold in a week under HN1."""
+    if num_days <= 0:
+        return 0
+    return hn1_daily_capacity(num_periods, break_after) * num_days
+
+
+def section_theory_demand(assignments) -> Dict:
+    """Total required THEORY periods/week per section.
+
+    Accepts duck-typed rows with session_type/section_id/periods_per_week
+    (practicals and rows without a section never contribute).
+    Returns {section_id: total_periods}.
+    """
+    demand: Dict = {}
+    for a in assignments:
+        if getattr(a, "session_type", "") != "theory":
+            continue
+        sid = getattr(a, "section_id", None)
+        if sid is None:
+            continue
+        demand[sid] = demand.get(sid, 0) + (getattr(a, "periods_per_week", 0) or 0)
+    return demand

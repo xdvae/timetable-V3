@@ -357,12 +357,12 @@ class TestHn1AuditScript(unittest.TestCase):
             m.db.session.commit()
             m.db.session.remove()
             m.db.engine.dispose()
-        env = dict(os.environ,
-                   DATABASE_URL="sqlite:///" + db_path.replace("\\", "/"))
+        env = dict(os.environ)
         repo = os.path.dirname(
             os.path.dirname(os.path.abspath(m.__file__)))
         proc = subprocess.run(
-            [sys.executable, "-m", "backend.audit_schedule"],
+            [sys.executable, "-m", "backend.audit_schedule",
+             "--db", db_path],
             capture_output=True, text=True, cwd=repo, env=env,
             timeout=120)
         self.assertIn("MAX_TWO_THEORY", proc.stdout)

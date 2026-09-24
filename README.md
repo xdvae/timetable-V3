@@ -364,8 +364,11 @@ data-fetching, or styling libraries without a concrete, recorded need.
 2. Backend: `pip install -r backend/requirements.txt`. Frontend: `cd frontend && npm install`.
 3. Make your changes (frontend work stays in `frontend/`).
 4. Run `npm run lint` and `npm run build`; for backend changes, run the app and
-   `python -m backend.audit_schedule` after generating a timetable. (There is no automated test
+   `python -m backend.audit_schedule --db <path>` after generating a timetable. (There is no automated test
    suite; verification is manual — say what you ran in the PR.)
+   Audit/diagnostic commands are read-only (SQLite `mode=ro`, no migrations, no admin
+   creation); anything requiring schema changes operates on a file copy via the explicit
+   `python -m backend.migrate --db <copy> upgrade` command — never on the live database.
 5. Inspect `git status` and `git diff --name-only`; confirm no unintended files.
 6. Submit a PR describing behavior changes and verification steps.
 
