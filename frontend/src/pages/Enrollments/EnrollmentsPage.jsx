@@ -31,7 +31,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table.jsx";
-import { DeleteConfirmDialog, FieldError, MutationError } from "@/components/feedback/mutation.jsx";
+import { DeleteConfirmDialog, FailureList, FieldError, MutationError } from "@/components/feedback/mutation.jsx";
+import { getFailures } from "@/lib/failures.js";
 import { useApi } from "@/hooks/use-api.js";
 import { useMutation } from "@/hooks/use-mutation.js";
 import { useToast } from "@/hooks/use-toast.js";
@@ -40,7 +41,9 @@ import {
   deleteEnrollment,
   getEnrollmentSections,
   getEnrollments,
+  setPreferredTheoryRoom,
 } from "@/services/api/enrollments.js";
+import { getRooms } from "@/services/api/rooms.js";
 
 function AddEnrollmentDialog({ open, onOpenChange, onCreated, programs }) {
   const toast = useToast();
@@ -294,10 +297,108 @@ export function EnrollmentsPage() {
   );
 }
 
+function roomLabel(room) {
+  const kind = room.room_type === "lab" ? "Lab" : "Classroom";
+  return `${room.name} — ${kind} — ${room.capacity} seats`;
+}
+
+/**
+ * Per-section preferred theory room editor. Inline select + save using
+ * the shared mutation/toast/feedback patterns; the parent refetches
+ * authoritative section data via onSaved. Never touches the timetable:
+ * the preference only affects future generations.
+ */
+function PreferredRoomControl({ section, rooms, roomsLoading, roomsUnavailable, onSaved }) {
+  const toast = useToast();
+  const { execute, isSubmitting, error } = useMutation(({ sectionId, roomId }) =>
+    setPreferredTheoryRoom(sectionId, roomId)
+  );
+  const current = section.preferred_theory_room_id ?? null;
+  const [selected, setSelected] = useState(current == null ? "none" : String(current));
+  const [touched, setTouched] = useState(false);
+  const failures = getFailures(error);
+  const stale =
+    current != null && !(rooms ?? []).some((room) => String(room.id) === String(current));
+  // A stale (dangling) preference displays as "No preferred room" with an
+  // explanatory note above until the user picks a value; it is never
+  // silently replaced.
+  const effectiveValue = !touched && stale ? "none" : selected;
+  const normalized = effectiveValue === "none" ? null : Number(effectiveValue);
+  const unchanged = normalized === current;
+  const disabled = isSubmitting || roomsLoading || roomsUnavailable || (rooms ?? []).length === 0;
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    const result = await execute({ sectionId: section.id, roomId: normalized });
+    if (result.ok) {
+      toast.success(result.data.message || "Preferred room saved.");
+      const warning = result.data.warning;
+      if (warning) {
+        toast.warning(warning.message || "Room saved with a warning.", {
+          title: "Preferred room",
+        });
+      }
+      onSaved();
+    } else if (result.error) {
+      toast.error(result.error.message || "Could not save preferred room.");
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="mt-4 space-y-3 border-t pt-4">
+      <div>
+        <Label htmlFor={`preferred-room-${section.id}`}>Preferred theory room</Label>
+        {stale ? (
+          <p className="mt-1 text-xs font-medium text-signal" role="alert">
+            Previously set room (ID {current}) is no longer available. Pick a room or
+            save “No preferred room” to clear it.
+          </p>
+        ) : null}
+        <Select
+          value={effectiveValue}
+          onValueChange={(next) => {
+            setSelected(next);
+            setTouched(true);
+          }}
+          disabled={disabled}
+        >
+          <SelectTrigger id={`preferred-room-${section.id}`} className="mt-1.5">
+            <SelectValue placeholder={roomsLoading ? "Loading rooms…" : "Select a room"} />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">No preferred room</SelectItem>
+            {(rooms ?? []).map((room) => (
+              <SelectItem key={room.id} value={String(room.id)}>
+                {roomLabel(room)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      {failures.length > 0 ? (
+        <FailureList failures={failures} />
+      ) : (
+        <MutationError error={error} />
+      )}
+      <p className="text-xs text-muted-foreground">
+        Preferred room is a scheduling preference. If it is unavailable or
+        incompatible, the scheduler may use another valid room. Applies to future
+        timetable generations; the current timetable is unchanged.
+      </p>
+      <div>
+        <Button type="submit" size="sm" disabled={disabled || unchanged}>
+          {isSubmitting ? "Saving…" : "Save Preferred Room"}
+        </Button>
+      </div>
+    </form>
+  );
+}
+
 export function SectionsPage() {
   const { eid } = useParams();
   const fetcher = useCallback(() => getEnrollmentSections(eid), [eid]);
   const { data, error, isLoading, retry } = useApi(fetcher);
+  const roomsQuery = useApi(getRooms);
 
   if (isLoading && !data) {
     return (
@@ -331,6 +432,9 @@ export function SectionsPage() {
 
   const enrollment = data.enrollment ?? {};
   const sections = data.sections ?? [];
+  const rooms = roomsQuery.data ?? [];
+  const roomsLoading = roomsQuery.isLoading && !roomsQuery.data;
+  const roomsUnavailable = roomsQuery.error != null && !roomsQuery.data;
   const labGroupCount = sections.reduce(
     (total, section) => total + (section.lab_groups?.length ?? 0),
     0
@@ -424,6 +528,20 @@ export function SectionsPage() {
                       ))}
                     </TableBody>
                   </Table>
+                )}
+                {roomsUnavailable ? (
+                  <p className="mt-4 text-xs font-medium text-signal" role="alert">
+                    Room list unavailable — preferred room cannot be changed right now.
+                  </p>
+                ) : (
+                  <PreferredRoomControl
+                    key={`${section.id}-${section.preferred_theory_room_id ?? "none"}`}
+                    section={section}
+                    rooms={rooms}
+                    roomsLoading={roomsLoading}
+                    roomsUnavailable={false}
+                    onSaved={retry}
+                  />
                 )}
               </Panel>
             ))}

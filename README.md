@@ -151,7 +151,10 @@ Read APIs:
 Write APIs mirror the former form POSTs (rooms, faculty, programs,
 enrollments, subjects, assignments, config, availability, CSV imports, schedule generation),
 returning `{ok, message, …}` on success and `{error, field_errors?}` with 4xx statuses on
-validation failure. Timetable downloads (Excel/CSV/printable HTML via `/export/*`) and
+validation failure. Section payloads expose `preferred_theory_room_id` (null when unset);
+`POST /api/sections/<sid>/preferred-room` with `{room_id}` (or null to clear) configures a
+section's soft home-room preference for future timetable generations — it never regenerates
+or moves the current timetable. Timetable downloads (Excel/CSV/printable HTML via `/export/*`) and
 sample CSVs (`/import/sample/*`) are same-origin download routes, which React calls
 directly.
 

@@ -134,6 +134,17 @@ def _room_json(r):
             "capacity": r.capacity, "equipment_count": r.equipment_count}
 
 
+def _section_json(s):
+    """Serialize one Section (same shape as the sections list endpoint,
+    including the soft preferred-theory-room id, null when unset)."""
+    return {"id": s.id, "name": s.name, "student_count": s.student_count,
+            "preferred_theory_room_id": s.preferred_theory_room_id,
+            "lab_groups": [{"id": lg.id, "name": lg.name,
+                            "student_count": lg.student_count}
+                           for lg in LabGroup.query.filter_by(
+                               section_id=s.id).all()]}
+
+
 def _faculty_json(f, load=0):
     return {"id": f.id, "name": f.name, "department": f.department,
             "faculty_type": f.faculty_type, "weekly_max_hours": f.weekly_max_hours,
@@ -348,12 +359,77 @@ def api_sections(eid):
         "enrollment": {"id": e.id,
                        "program_name": e.program.name if e.program else "?",
                        "year_label": e.year_label, "total_students": e.total_students},
-        "sections": [{"id": s.id, "name": s.name, "student_count": s.student_count,
-                      "lab_groups": [{"id": lg.id, "name": lg.name,
-                                      "student_count": lg.student_count}
-                                     for lg in LabGroup.query.filter_by(section_id=s.id).all()]}
-                     for s in sections],
+        "sections": [_section_json(s) for s in sections],
     })
+
+
+@api_bp.route("/sections/<int:sid>/preferred-room", methods=["POST"])
+@login_required
+def api_section_preferred_room(sid):
+    """SET/CLEAR a section's preferred theory room (soft preference only).
+
+    Payload: {room_id} — an int room id, or null/blank to clear. Only
+    room existence is validated (404 UNKNOWN_ROOM); type/capacity/
+    occupancy stay scheduling-time concerns, so a lab or small room is
+    accepted with a warning, never rejected. Never touches the
+    timetable: only future generations observe the change.
+    """
+    data = _data()
+    if "room_id" not in data:
+        raise ApiError("Missing required fields.", 422,
+                       {"room_id": "This field is required."})
+    raw = data.get("room_id")
+    if raw is None or (isinstance(raw, str) and raw.strip() == ""):
+        room_id = None  # clear the preference
+    else:
+        try:
+            room_id = int(raw)
+        except (TypeError, ValueError):
+            raise ApiError("Invalid input.", 422,
+                           {"room_id": "Must be a whole number or null."})
+    s = Section.query.get(sid)
+    if not s:
+        raise ApiError("Section not found.", 404, None,
+                       code="UNKNOWN_SECTION",
+                       details={"section_id": sid},
+                       failures=[{"code": "UNKNOWN_SECTION",
+                                  "message": f"Section {sid} does not exist.",
+                                  "details": {"section_id": sid}}])
+    warning = None
+    if room_id is not None:
+        r = Room.query.get(room_id)
+        if not r:
+            raise ApiError("Room not found.", 404, None,
+                           code="UNKNOWN_ROOM",
+                           details={"room_id": room_id,
+                                    "section_id": sid},
+                           failures=[{"code": "UNKNOWN_ROOM",
+                                      "message": f"Room {room_id} does not "
+                                                 f"exist.",
+                                      "details": {"room_id": room_id,
+                                                  "section_id": sid}}])
+        if r.room_type != "theory":
+            warning = {"message": f"Room '{r.name}' is a {r.room_type} "
+                                  f"room; the preference applies to theory "
+                                  f"classes and may rarely apply.",
+                       "room_id": r.id, "room_type": r.room_type,
+                       "section_id": s.id}
+    try:
+        s.preferred_theory_room_id = room_id
+        db.session.flush()
+        db.session.commit()
+        db.session.refresh(s)
+    except Exception as exc:  # noqa: BLE001 — rollback must cover any DB error
+        db.session.rollback()
+        raise ApiError(f"Could not save preferred room: {exc}", 422)
+    if room_id is None:
+        message = f"Preferred room cleared for section '{s.name}'."
+    else:
+        message = (f"Preferred theory room for section '{s.name}' set to "
+                   f"room {room_id}. Future timetables will prefer it; the "
+                   f"current timetable is unchanged.")
+    return jsonify({"ok": True, "message": message,
+                    "section": _section_json(s), "warning": warning})
 
 
 @api_bp.route("/subjects", methods=["GET"])
@@ -406,7 +482,9 @@ def api_assignments():
                       "practical_block_length": s.practical_block_length}
                      for s in subjects],
         "sections": [{"id": s.id, "name": s.name,
-                      "student_count": s.student_count} for s in sections],
+                       "student_count": s.student_count,
+                       "preferred_theory_room_id":
+                           s.preferred_theory_room_id} for s in sections],
         "lab_groups": [{"id": lg.id, "name": lg.name,
                         "student_count": lg.student_count} for lg in lab_groups],
         "faculty_load": loads,
@@ -430,8 +508,9 @@ def api_overview():
             "year_label": e.year_label, "total_students": e.total_students,
             "sections": [{
                 "id": s.id, "name": s.name, "student_count": s.student_count,
+                "preferred_theory_room_id": s.preferred_theory_room_id,
                 "lab_groups": [{"id": lg.id, "name": lg.name,
-                                "student_count": lg.student_count}
+                                 "student_count": lg.student_count}
                                for lg in LabGroup.query.filter_by(section_id=s.id).all()],
             } for s in Section.query.filter_by(enrollment_id=e.id).all()],
         } for e in enrollments],
@@ -676,7 +755,10 @@ def api_enrollment_create():
                        "year_label": e.year_label,
                        "total_students": e.total_students},
         "sections": [{"id": s.id, "name": s.name,
-                      "student_count": s.student_count} for s in created_sections],
+                       "student_count": s.student_count,
+                       "preferred_theory_room_id":
+                           s.preferred_theory_room_id}
+                      for s in created_sections],
     }), 201
 
 
