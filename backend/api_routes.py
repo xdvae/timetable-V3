@@ -839,6 +839,213 @@ def api_assignment_delete(aid):
     return jsonify({"ok": True, "message": "Assignment deleted."})
 
 
+# -------------------------------------- faculty reassignment/swap (6H)
+# Thin ownership operations: every rule lives in
+# backend/faculty_reassignment.py and backend/faculty_swaps.py. Routes
+# only parse the request shape, call the domain service, and map the
+# structured result/error onto the ApiError envelope (code/details/
+# failures preserved verbatim for the future frontend).
+def _assignment_json(a):
+    """Serialize one TeachingAssignment (same fields as GET /assignments,
+    plus specialization_id for spec assignments)."""
+    return {"id": a.id, "faculty_id": a.faculty_id,
+            "faculty_name": a.faculty.name if a.faculty else "?",
+            "subject_id": a.subject_id,
+            "subject_name": a.subject.name if a.subject else "?",
+            "session_type": a.session_type,
+            "section_id": a.section_id, "lab_group_id": a.lab_group_id,
+            "specialization_id": getattr(a, "specialization_id", None),
+            "group": a.group_label(),
+            "periods_per_week": a.periods_per_week,
+            "block_length": a.block_length}
+
+
+def _reassign_api_error(exc):
+    """Map FacultyReassignmentError onto the structured ApiError envelope."""
+    payload = exc.to_payload()
+    # 404 is reserved for missing assignment/faculty; every failed
+    # placement validation (including unknown room) is a 422.
+    status = 404 if payload["code"] in ("UNKNOWN_ASSIGNMENT",
+                                        "UNKNOWN_FACULTY") else 422
+    raise ApiError(payload["error"], status, None,
+                   code=payload["code"], details=payload["details"],
+                   failures=payload["failures"])
+
+
+def _reassign_failures_api_error(failures):
+    """Structured ApiError for a dry-run reassignment failure list."""
+    primary = failures[0]
+    raise ApiError(primary.message, 422, None,
+                   code=primary.code, details=primary.details,
+                   failures=[{"code": f.code, "message": f.message,
+                              "details": f.details} for f in failures])
+
+
+def _swap_api_error(exc):
+    """Map FacultySwapError onto the structured ApiError envelope."""
+    payload = exc.to_payload()
+    # 404 is reserved for missing assignments; every failed placement
+    # validation (including unknown room) is a 422.
+    status = 404 if payload["code"] == "UNKNOWN_ASSIGNMENT" else 422
+    raise ApiError(payload["error"], status, None,
+                   code=payload["code"], details=payload["details"],
+                   failures=payload["failures"])
+
+
+def _swap_failures_api_error(failures):
+    """Structured ApiError for a dry-run swap failure list."""
+    primary = failures[0]
+    raise ApiError(primary.message, 422, None,
+                   code=primary.code, details=primary.details,
+                   failures=[{"code": f.code, "message": f.message,
+                              "details": f.details} for f in failures])
+
+
+@api_bp.route("/assignments/<int:aid>/validate-reassign", methods=["POST"])
+@login_required
+def api_validate_reassign(aid):
+    """DRY-RUN: check whether a faculty reassignment would be valid.
+
+    Payload: {faculty_id} — only this field is read. No mutation.
+    """
+    from backend import faculty_reassignment as fr_svc
+    data = _data()
+    faculty_id = _required_int(data, "faculty_id")
+    try:
+        result = fr_svc.validate_reassignment(db, aid, faculty_id)
+    except fr_svc.FacultyReassignmentError as exc:
+        _reassign_api_error(exc)
+    if not result.ok:
+        _reassign_failures_api_error(result.failures)
+    if result.noop:
+        return jsonify({"ok": True, "noop": True, "dry_run": True,
+                        "message": "Assignment already uses this faculty; "
+                                   "nothing would change.",
+                        "assignment_id": result.assignment_id,
+                        "current_faculty_id": result.current_faculty_id,
+                        "new_faculty_id": result.new_faculty_id,
+                        "scheduled_class_ids": result.scheduled_class_ids,
+                        "warning": result.warning})
+    return jsonify({"ok": True, "noop": False, "dry_run": True,
+                    "message": "Reassignment is valid.",
+                    "assignment_id": result.assignment_id,
+                    "current_faculty_id": result.current_faculty_id,
+                    "new_faculty_id": result.new_faculty_id,
+                    "scheduled_class_ids": result.scheduled_class_ids,
+                    "warning": result.warning})
+
+
+@api_bp.route("/assignments/<int:aid>/reassign", methods=["POST"])
+@login_required
+def api_reassign_assignment(aid):
+    """REASSIGN: atomically change one assignment's faculty (no schedule
+    regeneration; placements preserved). On failure nothing is modified.
+    """
+    from backend import faculty_reassignment as fr_svc
+    data = _data()
+    faculty_id = _required_int(data, "faculty_id")
+    try:
+        assignment, result = fr_svc.reassign_faculty(db, aid, faculty_id)
+    except fr_svc.FacultyReassignmentError as exc:
+        _reassign_api_error(exc)
+    if result.noop:
+        return jsonify({"ok": True, "noop": True,
+                        "message": "Assignment already uses this faculty; "
+                                   "nothing changed.",
+                        "assignment": _assignment_json(assignment)})
+    return jsonify({"ok": True, "noop": False,
+                    "message": f"Assignment {assignment.id} reassigned to "
+                               f"{assignment.faculty.name if assignment.faculty else '?'}.",
+                    "assignment": _assignment_json(assignment),
+                    "result": {"assignment_id": result.assignment_id,
+                               "previous_faculty_id":
+                                   result.current_faculty_id,
+                               "faculty_id": result.new_faculty_id,
+                               "scheduled_class_ids":
+                                   result.scheduled_class_ids,
+                               "noop": False,
+                               "warning": result.warning}})
+
+
+@api_bp.route("/assignments/validate-swap", methods=["POST"])
+@login_required
+def api_validate_swap():
+    """DRY-RUN: check whether a faculty swap would be valid (no mutation).
+
+    Payload: {assignment_a_id, assignment_b_id}.
+    """
+    from backend import faculty_swaps as fs_svc
+    data = _data()
+    a_id = _required_int(data, "assignment_a_id")
+    b_id = _required_int(data, "assignment_b_id")
+    try:
+        result = fs_svc.validate_faculty_swap(db, a_id, b_id)
+    except fs_svc.FacultySwapError as exc:
+        _swap_api_error(exc)
+    if not result.ok:
+        _swap_failures_api_error(result.failures)
+    if result.noop:
+        return jsonify({"ok": True, "noop": True, "dry_run": True,
+                        "message": "Both assignments already use the same "
+                                   "faculty; nothing would change.",
+                        "assignment_a_id": result.assignment_a_id,
+                        "assignment_b_id": result.assignment_b_id,
+                        "faculty_a_id": result.faculty_a_id,
+                        "faculty_b_id": result.faculty_b_id,
+                        "scheduled_class_ids_a":
+                            result.scheduled_class_ids_a,
+                        "scheduled_class_ids_b":
+                            result.scheduled_class_ids_b,
+                        "warnings": result.warnings})
+    return jsonify({"ok": True, "noop": False, "dry_run": True,
+                    "message": "Swap is valid.",
+                    "assignment_a_id": result.assignment_a_id,
+                    "assignment_b_id": result.assignment_b_id,
+                    "faculty_a_id": result.faculty_a_id,
+                    "faculty_b_id": result.faculty_b_id,
+                    "scheduled_class_ids_a": result.scheduled_class_ids_a,
+                    "scheduled_class_ids_b": result.scheduled_class_ids_b,
+                    "warnings": result.warnings})
+
+
+@api_bp.route("/assignments/swap", methods=["POST"])
+@login_required
+def api_swap_assignments():
+    """SWAP: atomically exchange two assignments' faculties (placements
+    preserved). On failure nothing is modified — never half-swapped.
+    """
+    from backend import faculty_swaps as fs_svc
+    data = _data()
+    a_id = _required_int(data, "assignment_a_id")
+    b_id = _required_int(data, "assignment_b_id")
+    try:
+        assignment_a, assignment_b, result = fs_svc.swap_faculty(
+            db, a_id, b_id)
+    except fs_svc.FacultySwapError as exc:
+        _swap_api_error(exc)
+    if result.noop:
+        return jsonify({"ok": True, "noop": True,
+                        "message": "Both assignments already use the same "
+                                   "faculty; nothing changed.",
+                        "assignments": [_assignment_json(assignment_a),
+                                        _assignment_json(assignment_b)]})
+    return jsonify({"ok": True, "noop": False,
+                    "message": f"Assignments {assignment_a.id} and "
+                               f"{assignment_b.id} swapped faculties.",
+                    "assignments": [_assignment_json(assignment_a),
+                                    _assignment_json(assignment_b)],
+                    "result": {"assignment_a_id": result.assignment_a_id,
+                               "assignment_b_id": result.assignment_b_id,
+                               "faculty_a_id": result.faculty_a_id,
+                               "faculty_b_id": result.faculty_b_id,
+                               "scheduled_class_ids_a":
+                                   result.scheduled_class_ids_a,
+                               "scheduled_class_ids_b":
+                                   result.scheduled_class_ids_b,
+                               "noop": False,
+                               "warnings": result.warnings}})
+
+
 # ------------------------------------------------------------------- import
 @api_bp.route("/import/rooms", methods=["POST"])
 @login_required
