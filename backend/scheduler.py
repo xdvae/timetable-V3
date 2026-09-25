@@ -44,9 +44,15 @@ from ortools.sat.python import cp_model
 # pruning, and each linear-constraint block notes which logical rule it
 # mirrors (predicates can never replace CP-SAT expressions — see Part 4).
 from backend.schedule_rules import (
+    check_block_geometry,
+    check_break_geometry,
+    check_day_known,
+    check_faculty_consecutive,
+    check_max_two_theory,
     check_room_compatible,
     hn1_windows,
     is_faculty_available,
+    max_run_length,
     overlap_count,
     valid_starts as rule_valid_starts,
 )
@@ -104,23 +110,248 @@ def valid_starts(length, num_periods, break_after):
     return rule_valid_starts(length, num_periods, break_after)
 
 
+def _residual_assignments(assignments, locked_periods):
+    """Copies of assignments with locked periods subtracted from demand.
+
+    Returns (residual_list, skipped_ids). A fully-locked assignment
+    (remaining == 0) is skipped: its locked ScheduledClass rows already
+    cover it. Remaining > 0 keeps the original block_length (the tail
+    session may be shorter, exactly like expand_sessions handles).
+    """
+    residual = []
+    skipped = []
+    for a in assignments:
+        locked = locked_periods.get(getattr(a, "id", None), 0)
+        if not locked:
+            residual.append(a)
+            continue
+        ppw = getattr(a, "periods_per_week", 0) or 0
+        remaining = ppw - locked
+        if remaining < 0:
+            return None, None  # caller reports infeasible
+        if remaining == 0:
+            skipped.append(getattr(a, "id", None))
+            continue
+        orig = a
+
+        class _Residual:
+            pass
+        r = _Residual()
+        r.id = orig.id
+        r.faculty_id = orig.faculty_id
+        r.subject_id = orig.subject_id
+        r.session_type = orig.session_type
+        r.section_id = getattr(orig, "section_id", None)
+        r.lab_group_id = getattr(orig, "lab_group_id", None)
+        r.periods_per_week = remaining
+        r.block_length = orig.block_length
+        r.lab_group = getattr(orig, "lab_group", None)
+        r._orig = orig
+
+        def _gk(self=orig):
+            return orig.group_key()
+        def _gl(self=orig):
+            return orig.group_label()
+        def _gs(self=orig):
+            return orig.group_size()
+        r.group_key = _gk
+        r.group_label = _gl
+        r.group_size = _gs
+        residual.append(r)
+    return residual, skipped
+
+
+def _locked_occupancy(locked_placements):
+    """Fixed cell sets for locked blocks (pre-solve occupancy)."""
+    room, fac, group, parent_fp, theory = set(), set(), set(), set(), set()
+    for lb in locked_placements or []:
+        day = lb["day"]
+        for p in range(lb["start_period"], lb["start_period"] + lb["length"]):
+            if lb.get("room_id") is not None:
+                room.add((lb["room_id"], day, p))
+            if lb.get("faculty_id") is not None:
+                fac.add((lb["faculty_id"], day, p))
+            if lb.get("group_key"):
+                group.add((lb["group_key"], day, p))
+            if lb.get("parent_section_key"):
+                # Mirror schedule_validator's "__parent__:" footprint: a
+                # locked lab practical blocks whole-section theory there.
+                parent_fp.add((f"__parent__:{lb['parent_section_key']}", day, p))
+            if lb.get("session_type") == "theory" and lb.get("group_key"):
+                theory.add((lb["group_key"], day, p))
+    return room, fac, group, parent_fp, theory
+
+
 def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
-                   break_after, max_consecutive, time_limit_seconds=30):
+                   break_after, max_consecutive, time_limit_seconds=30,
+                   locked_placements=None):
     """
     faculty_unavailable: dict faculty_id -> set of "day:period" strings
+    locked_placements: optional list of fixed dicts, each with
+        {locked_block_id, assignment_id, day, start_period, length,
+         room_id, faculty_id, session_type, group_key, parent_section_key}.
+        They enter occupancy BEFORE solving: conflicting normal candidates
+        are pruned and CP-SAT constraints count locked periods as constants.
+        Locked rows are never moved, never re-emitted in `placements`.
     Returns: (status_str, list_of_placements) where each placement is
              {assignment_id, seq, day, start_period, length, room_id}
              or (status_str, []) / (status_str, None) with a message on failure.
     """
-    sessions = expand_sessions(assignments)
+    locked_placements = list(locked_placements or [])
+    locked_ids = [lb.get("locked_block_id") for lb in locked_placements
+                  if lb.get("locked_block_id") is not None]
+
+    def _locked_infeasible(reason):
+        suffix = (f" Locked block(s) {sorted(locked_ids)} make the schedule "
+                  f"impossible: {reason}" if locked_ids else f" {reason}")
+        return ("INFEASIBLE", [],
+                "No valid timetable could be found with the current data and "
+                "constraints. Try adding more rooms, relaxing faculty availability, "
+                "or checking for faculty overloaded across too many sections."
+                + suffix)
+
+    # ---- Locked geometry / compatibility pre-check (re-validated here so
+    # the solver never trusts unvalidated input) ----
+    for lb in locked_placements:
+        if not check_day_known(lb["day"], days).ok:
+            return _locked_infeasible(
+                f"locked block {lb.get('locked_block_id')} has unknown day "
+                f"'{lb['day']}'.")
+        if not check_block_geometry(lb["start_period"], lb["length"],
+                                    num_periods).ok:
+            return _locked_infeasible(
+                f"locked block {lb.get('locked_block_id')} does not fit in "
+                f"a {num_periods}-period day.")
+        if not check_break_geometry(lb["start_period"], lb["length"],
+                                    break_after).ok:
+            return _locked_infeasible(
+                f"locked block {lb.get('locked_block_id')} spans the break.")
+    # ---- Locked-vs-locked self-conflict (two fixed blocks collide) ----
+    _lr, _lf, _lg, _lp, _lt = _locked_occupancy(locked_placements)
+    def _dup(cells):
+        seen, dups = set(), set()
+        for c in cells:
+            if c in seen:
+                dups.add(c)
+            seen.add(c)
+        return dups
+    _all_room = [(lb["room_id"], lb["day"], p)
+                 for lb in locked_placements if lb.get("room_id") is not None
+                 for p in range(lb["start_period"], lb["start_period"] + lb["length"])]
+    _all_fac = [(lb["faculty_id"], lb["day"], p)
+                for lb in locked_placements if lb.get("faculty_id") is not None
+                for p in range(lb["start_period"], lb["start_period"] + lb["length"])]
+    _all_grp = [(lb["group_key"], lb["day"], p)
+                for lb in locked_placements if lb.get("group_key")
+                for p in range(lb["start_period"], lb["start_period"] + lb["length"])]
+    if _dup(_all_room) or _dup(_all_fac) or _dup(_all_grp):
+        return _locked_infeasible(
+            "two locked blocks book the same room, faculty, or student "
+            "group at the same time.")
+    # Hierarchy among locked blocks: locked lab vs locked section theory.
+    _locked_sec_theory = {(lb["group_key"], lb["day"], p)
+                          for lb in locked_placements
+                          if lb.get("session_type") == "theory"
+                          and lb.get("group_key", "").startswith("section:")
+                          for p in range(lb["start_period"],
+                                         lb["start_period"] + lb["length"])}
+    for lb in locked_placements:
+        if lb.get("parent_section_key"):
+            for p in range(lb["start_period"], lb["start_period"] + lb["length"]):
+                if (lb["parent_section_key"], lb["day"], p) in _locked_sec_theory:
+                    return _locked_infeasible(
+                        "a locked lab practical overlaps a locked "
+                        "whole-section theory class for its own section.")
+    # Locked faculty availability + HN1/H12 self-violation.
+    for lb in locked_placements:
+        unavail = faculty_unavailable.get(lb.get("faculty_id"), set())
+        if not is_faculty_available(unavail, lb["day"], lb["start_period"],
+                                    lb["length"]):
+            return _locked_infeasible(
+                f"locked block {lb.get('locked_block_id')} falls in an "
+                f"unavailable slot for its faculty.")
+    _theory_by_sec_day = {}
+    for (gkey, day, p) in _lt:
+        _theory_by_sec_day.setdefault((gkey, day), set()).add(p)
+    for (gkey, day), occ in _theory_by_sec_day.items():
+        bad = check_max_two_theory(occ, num_periods, break_after, gkey, day)
+        if bad:
+            return _locked_infeasible(
+                "locked theory blocks alone violate MAX_TWO_THEORY "
+                f"({gkey} on {day}).")
+    if max_consecutive and max_consecutive > 0:
+        _fac_by_day = {}
+        for (fid, day, p) in _lf:
+            _fac_by_day.setdefault((fid, day), set()).add(p)
+        for (fid, day), occ in _fac_by_day.items():
+            if not check_faculty_consecutive(occ, max_consecutive,
+                                             faculty_id=fid, day=day).ok:
+                return _locked_infeasible(
+                    f"locked blocks alone exceed the consecutive-teaching "
+                    f"limit for faculty {fid} on {day}.")
+
+    # ---- Demand subtraction: locked periods are already placed ----
+    locked_periods = {}
+    for lb in locked_placements:
+        aid = lb.get("assignment_id")
+        if aid is not None:
+            locked_periods[aid] = locked_periods.get(aid, 0) + (lb["length"] or 0)
+    for aid, total in locked_periods.items():
+        match = next((a for a in assignments if getattr(a, "id", None) == aid), None)
+        if match is None:
+            return _locked_infeasible(
+                f"locked block references missing assignment {aid}.")
+        if total > (getattr(match, "periods_per_week", 0) or 0):
+            return _locked_infeasible(
+                f"locked periods ({total}) exceed assignment {aid} "
+                f"periods/week ({match.periods_per_week}).")
+    residual = assignments
+    if locked_periods:
+        residual, _ = _residual_assignments(assignments, locked_periods)
+        if residual is None:
+            return _locked_infeasible("locked periods exceed demand.")
+        if not residual:
+            return "OPTIMAL", [], None
+
+    sessions = expand_sessions(residual)
     if not sessions:
         return "NO_SESSIONS", [], "No teaching assignments to schedule."
+
+    locked_room, locked_fac, locked_group, locked_parent_fp, locked_theory = \
+        _locked_occupancy(locked_placements)
+    # Per (group_key, day) locked-theory period sets for HN1 pruning.
+    locked_theory_day = {}
+    for (gkey, day, p) in locked_theory:
+        locked_theory_day.setdefault((gkey, day), set()).add(p)
+    locked_fac_day = {}
+    for (fid, day, p) in locked_fac:
+        locked_fac_day.setdefault((fid, day), set()).add(p)
 
     model = cp_model.CpModel()
 
     # x[(s_idx, day, start, room_id)] = BoolVar
     x = {}
     session_options = [[] for _ in sessions]  # list of (day,start,room_id) per session
+
+    def _conflicts_locked(sess, day, start, room_id):
+        length = sess["length"]
+        for p in range(start, start + length):
+            if (room_id, day, p) in locked_room:
+                return True
+            if (sess["faculty_id"], day, p) in locked_fac:
+                return True
+            if (sess["group_key"], day, p) in locked_group:
+                return True
+            parent = sess.get("parent_section_key")
+            if parent and (parent, day, p) in _locked_sec_theory_cells():
+                return True
+            if sess["session_type"] == "theory" and sess["group_key"].startswith("section:"):
+                if (f"__parent__:{sess['group_key']}", day, p) in locked_parent_fp:
+                    return True
+        return False
+
+    def _locked_sec_theory_cells():
+        return _locked_sec_theory
 
     for s_idx, sess in enumerate(sessions):
         rooms_ok = compatible_rooms(sess, rooms)
@@ -143,7 +374,36 @@ def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
                 # Phase 6C: H9 faculty-availability pruning via shared rule.
                 if not is_faculty_available(unavail, day, start, sess["length"]):
                     continue
+                # Phase 6E: HN1 pruning — candidate + locked theory alone
+                # covering a full 3-window is unavoidable in any solution
+                # containing this candidate (more sessions only extend the
+                # streak), so drop it. Wider violations stay as CP-SAT
+                # constraints below.
+                if (locked_placements and sess["session_type"] == "theory"
+                        and sess["group_key"].startswith("section:")):
+                    combo = (set(locked_theory_day.get((sess["group_key"], day), set()))
+                             | set(range(start, start + sess["length"])))
+                    if check_max_two_theory(combo, num_periods, break_after,
+                                            sess["group_label"], day):
+                        continue
+                # Phase 6E: H12 pruning — candidate + locked faculty run
+                # already exceeding the limit can never be repaired.
+                if max_consecutive and max_consecutive > 0 and locked_placements:
+                    fbase = set(locked_fac_day.get((sess["faculty_id"], day), set()))
+                    fbase.update(range(start, start + sess["length"]))
+                    if max_run_length(fbase) > max_consecutive:
+                        continue
                 for room in rooms_ok:
+                    if locked_placements:
+                        clash = False
+                        for p in range(start, start + sess["length"]):
+                            if (room.id, day, p) in locked_room:
+                                clash = True
+                                break
+                        if clash:
+                            continue
+                        if _conflicts_locked(sess, day, start, room.id):
+                            continue
                     var = model.NewBoolVar(f"x_{s_idx}_{day}_{start}_{room.id}")
                     x[(s_idx, day, start, room.id)] = var
                     session_options[s_idx].append((day, start, room.id))
@@ -151,10 +411,12 @@ def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
     for s_idx, sess in enumerate(sessions):
         opts = session_options[s_idx]
         if not opts:
-            return "INFEASIBLE", [], (
-                f"'{sess['group_label']}' ({sess['subject_id']}) has no legal "
-                f"day/period/room slot at all — check faculty availability and room setup."
-            )
+            msg = (f"'{sess['group_label']}' ({sess['subject_id']}) has no legal "
+                   f"day/period/room slot at all — check faculty availability and room setup.")
+            if locked_ids:
+                msg += (f" Locked block(s) {sorted(locked_ids)} leave no feasible "
+                        f"placement for assignment {sess['assignment_id']}.")
+            return "INFEASIBLE", [], msg
         # H1 (schedule_rules.check_session_coverage is the logical counterpart):
         # every session is placed exactly once.
         model.Add(sum(x[(s_idx, d, st, r)] for (d, st, r) in opts) == 1)
@@ -220,8 +482,20 @@ def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
                     terms = []
                     for p in range(p0, p0 + window):
                         terms.extend(fac_occ.get((fid, d, p), []))
+                    # Phase 6E: locked periods count as constants in the
+                    # same window (pre-solve occupancy, never moved).
+                    locked_n = sum(
+                        1 for p in range(p0, p0 + window)
+                        if (fid, d, p) in locked_fac) if locked_placements else 0
                     if terms:
-                        model.Add(sum(terms) <= max_consecutive)
+                        if locked_n:
+                            model.Add(sum(terms) + locked_n <= max_consecutive)
+                        else:
+                            model.Add(sum(terms) <= max_consecutive)
+                    elif locked_n > max_consecutive:
+                        return _locked_infeasible(
+                            f"locked blocks exceed the consecutive-teaching "
+                            f"limit for faculty {fid} on {d}.")
 
     # ---- HN1: max two consecutive theory periods per section per day ----
     # Logical counterpart: schedule_rules.check_max_two_theory. For every
@@ -246,8 +520,20 @@ def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
                         coeff = overlap_count(start, length, window)
                         if coeff:
                             terms.append(coeff * x[(s_idx, od, start, r)])
+                # Phase 6E: locked theory periods in this window count as
+                # constants (pre-solve occupancy, never moved).
+                locked_n = sum(
+                    1 for p in window
+                    if (sec_key, d, p) in locked_theory) if locked_placements else 0
                 if terms:
-                    model.Add(sum(terms) <= 2)
+                    if locked_n:
+                        model.Add(sum(terms) + locked_n <= 2)
+                    else:
+                        model.Add(sum(terms) <= 2)
+                elif locked_n > 2:
+                    return _locked_infeasible(
+                        f"locked theory blocks violate MAX_TWO_THEORY "
+                        f"({sec_key} on {d}, periods {list(window)}).")
 
     # ---- Soft objective: minimize start periods (compact + early-finish) ----
     objective_terms = []
@@ -263,11 +549,13 @@ def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
     status = solver.Solve(model)
 
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        return "INFEASIBLE", [], (
-            "No valid timetable could be found with the current data and "
-            "constraints. Try adding more rooms, relaxing faculty availability, "
-            "or checking for faculty overloaded across too many sections."
-        )
+        msg = ("No valid timetable could be found with the current data and "
+               "constraints. Try adding more rooms, relaxing faculty availability, "
+               "or checking for faculty overloaded across too many sections.")
+        if locked_ids:
+            msg += (f" Locked block(s) {sorted(locked_ids)} are part of the "
+                    f"conflict and were not moved.")
+        return "INFEASIBLE", [], msg
 
     placements = []
     for s_idx, sess in enumerate(sessions):

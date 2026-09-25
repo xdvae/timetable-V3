@@ -31,13 +31,23 @@ TIMETABLE_VIEWS = ("section", "faculty", "room")
 
 # ------------------------------------------------------------------ helpers
 class ApiError(Exception):
-    """Raise inside an API view to return a structured JSON error."""
+    """Raise inside an API view to return a structured JSON error.
 
-    def __init__(self, message, status=422, field_errors=None):
+    Phase 6E: optional `code` (stable UPPER_SNAKE), `details` (structured
+    conflict context), and `failures` (list of {code, message, details})
+    carry the RuleResult contract to administrators without changing the
+    shape of pre-6E errors (those fields are omitted when unset).
+    """
+
+    def __init__(self, message, status=422, field_errors=None, code=None,
+                 details=None, failures=None):
         super().__init__(message)
         self.message = message
         self.status = status
         self.field_errors = field_errors
+        self.code = code
+        self.details = details
+        self.failures = failures
 
 
 @api_bp.errorhandler(ApiError)
@@ -45,6 +55,12 @@ def _handle_api_error(err):
     payload = {"error": err.message}
     if err.field_errors:
         payload["field_errors"] = err.field_errors
+    if getattr(err, "code", None):
+        payload["code"] = err.code
+    if getattr(err, "details", None) is not None:
+        payload["details"] = err.details
+    if getattr(err, "failures", None):
+        payload["failures"] = err.failures
     return jsonify(payload), err.status
 
 
@@ -804,26 +820,57 @@ def api_import_workload():
 @login_required
 def api_schedule_run():
     # Invokes the EXISTING scheduler with the EXACT same inputs the Jinja
-    # route uses (same time limit, same wipe-and-replace persistence).
+    # route uses (same time limit, same persistence semantics).
+    # Phase 6E: locked interdepartment blocks enter the solver as fixed
+    # pre-solve occupancy (never moved); on SUCCESS only non-locked rows
+    # are replaced, on FAILURE the previous schedule is preserved untouched.
     cfg = _get_config()
     assignments = TeachingAssignment.query.all()
     rooms = Room.query.all()
     faculty_unavail = {f.id: f.unavailable_set() for f in Faculty.query.all()}
     days = cfg.day_list()
     periods = cfg.period_list()
+    try:
+        from backend import locked_blocks as lb_svc
+        locked_placements = lb_svc.query_locked_placements()
+    except Exception:
+        locked_placements = []
+    locked_ids = sorted({p.get("locked_block_id") for p in locked_placements
+                         if p.get("locked_block_id") is not None})
 
     status, placements, message = run_scheduler(
         assignments, rooms, faculty_unavail, days, len(periods),
         cfg.break_after_periods if cfg.break_after_periods else None,
         cfg.max_consecutive_teaching,
         time_limit_seconds=30,
+        locked_placements=locked_placements,
     )
 
     if status in ("INFEASIBLE", "NO_SESSIONS"):
+        # FAILURE: preserve the previous schedule — nothing is deleted or
+        # written here. Locked-caused infeasibility carries a structured
+        # SCHEDULING_INFEASIBLE payload identifying the blocking locks.
+        if locked_ids and status == "INFEASIBLE":
+            raise ApiError(
+                f"Scheduling failed: {message}", 422,
+                code="SCHEDULING_INFEASIBLE",
+                details={"locked_block_ids": locked_ids,
+                         "reason": message or "locked placements leave no feasible schedule"},
+                failures=[{"code": "SCHEDULING_INFEASIBLE",
+                           "message": message or "",
+                           "details": {"locked_block_ids": locked_ids}}])
         raise ApiError(f"Scheduling failed: {message}", 422)
 
+    # SUCCESS: atomically replace non-locked rows; locked rows stay exactly
+    # where they are (same day/start/length/room/faculty).
     run_id = uuid.uuid4().hex[:10]
-    ScheduledClass.query.delete()
+    try:
+        db.session.query(ScheduledClass).filter(
+            ScheduledClass.is_locked.is_(False)).delete(synchronize_session=False)
+    except Exception:
+        # Pre-6C database without lock columns: legacy wipe-and-replace.
+        db.session.rollback()
+        ScheduledClass.query.delete()
     for p in placements:
         db.session.add(ScheduledClass(
             assignment_id=p["assignment_id"], day=p["day"], start_period=p["start_period"],
@@ -831,7 +878,108 @@ def api_schedule_run():
     db.session.commit()
     return jsonify({"ok": True,
                     "message": f"Timetable generated ({status}). {len(placements)} class blocks placed.",
-                    "status": status, "placements": len(placements), "run_id": run_id})
+                    "status": status, "placements": len(placements), "run_id": run_id,
+                    "locked_preserved": len(locked_ids)})
+
+
+# ------------------------------------------------------- locked blocks (6E)
+@api_bp.route("/locked-blocks", methods=["GET"])
+@login_required
+def api_locked_blocks_list():
+    """READ: return existing interdepartment locked blocks.
+
+    ScheduledClass stays the timetable source of truth; each entry carries
+    its scheduled_class_id link for auditability.
+    """
+    from backend.models import LockedBlock
+    try:
+        blocks = LockedBlock.query.filter_by(kind="interdepartment").order_by(
+            LockedBlock.id).all()
+    except Exception:
+        # Pre-6C database: no locked-block table yet.
+        return jsonify({"locked_blocks": []})
+    out = []
+    try:
+        from backend import locked_blocks as lb_svc
+        for lb in blocks:
+            sc = ScheduledClass.query.filter_by(locked_block_id=lb.id).first()
+            out.append(lb_svc.locked_block_json(
+                lb, scheduled_class_id=sc.id if sc else None))
+    except Exception:
+        out = []
+    return jsonify({"locked_blocks": out})
+
+
+@api_bp.route("/locked-blocks", methods=["POST"])
+@login_required
+def api_locked_block_create():
+    """CREATE: validate + atomically persist LockedBlock + ScheduledClass.
+
+    Inputs (JSON or form): assignment_id, day, start_period, length,
+    room_id, plus optional department/note (and optional explicit
+    faculty_id/subject_id/section_id/lab_group_id overrides, which are
+    mismatch-checked against the assignment).
+    """
+    from backend import locked_blocks as lb_svc
+    data = _data()
+    assignment_id = _required_int(data, "assignment_id")
+    day = _require_str(data, "day")
+    start_period = _required_int(data, "start_period")
+    length = _required_int(data, "length")
+    room_id = _required_int(data, "room_id")
+    department = (data.get("department") or "").strip() \
+        if isinstance(data.get("department"), str) else data.get("department")
+    note = (data.get("note") or "").strip() \
+        if isinstance(data.get("note"), str) else data.get("note")
+    overrides = {}
+    for field in ("faculty_id", "subject_id", "section_id", "lab_group_id"):
+        if data.get(field) not in ("", None):
+            overrides[field] = _required_int(data, field)
+    try:
+        lb, sc = lb_svc.create_locked_block(
+            db, assignment_id=assignment_id, day=day,
+            start_period=start_period, length=length, room_id=room_id,
+            department=department or None, note=note or None, **overrides)
+    except lb_svc.LockedBlockError as exc:
+        payload = exc.to_payload()
+        primary = exc.failures[0] if exc.failures else None
+        field_errors = None
+        if primary and primary.code in ("UNKNOWN_DAY", "PERIOD_OUT_OF_RANGE",
+                                        "BLOCK_GEOMETRY", "BREAK_SPAN",
+                                        "UNKNOWN_ASSIGNMENT", "UNKNOWN_ROOM",
+                                        "ROOM_REQUIRED"):
+            field_errors = {"placement": primary.message}
+        raise ApiError(payload["error"], 422, field_errors,
+                       code=payload["code"], details=payload["details"],
+                       failures=payload["failures"])
+    return jsonify({"ok": True,
+                    "message": f"Locked block created for assignment {lb.assignment_id} "
+                               f"on {lb.day} period {lb.start_period} (x{lb.length}).",
+                    "locked_block": lb_svc.locked_block_json(lb, scheduled_class_id=sc.id),
+                    "scheduled_class": {"id": sc.id, "assignment_id": sc.assignment_id,
+                                        "day": sc.day, "start_period": sc.start_period,
+                                        "length": sc.length, "room_id": sc.room_id,
+                                        "is_locked": True,
+                                        "locked_block_id": lb.id}}), 201
+
+
+@api_bp.route("/locked-blocks/<int:bid>/delete", methods=["POST"])
+@login_required
+def api_locked_block_delete(bid):
+    """DELETE/CANCEL: atomically remove a LockedBlock + its ScheduledClass.
+
+    Removal only frees resources, so it is always permitted once the block
+    exists; both rows are removed together (never a dangling class).
+    """
+    from backend import locked_blocks as lb_svc
+    try:
+        lb_svc.delete_locked_block(db, bid)
+    except lb_svc.LockedBlockError as exc:
+        payload = exc.to_payload()
+        raise ApiError(payload["error"], 404 if "does not exist" in payload["error"] else 422,
+                       code=payload["code"], details=payload["details"],
+                       failures=payload["failures"])
+    return jsonify({"ok": True, "message": "Locked block deleted."})
 
 
 # ------------------------------------------------------------------ wiring

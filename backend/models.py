@@ -256,6 +256,12 @@ class LockedBlock(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     kind = db.Column(db.String(30), nullable=False, default="interdepartment")
     # interdepartment | manual_fix | admin_override
+    # Phase 6E (additive, nullable): the TeachingAssignment whose session
+    # this block pins. Lets the scheduler subtract locked periods from
+    # demand and lets validation report ASSIGNMENT_MISMATCH precisely.
+    # Pre-6E rows keep NULL; every 6E interdepartment block sets it.
+    assignment_id = db.Column(db.Integer, db.ForeignKey("teaching_assignment.id"),
+                              nullable=True)
     subject_id = db.Column(db.Integer, db.ForeignKey("subject.id"), nullable=False)
     faculty_id = db.Column(db.Integer, db.ForeignKey("faculty.id"), nullable=False)
     section_id = db.Column(db.Integer, db.ForeignKey("section.id"), nullable=True)
@@ -269,6 +275,7 @@ class LockedBlock(db.Model):
     is_external = db.Column(db.Boolean, nullable=False, default=True, server_default="1")
     note = db.Column(db.Text, nullable=True)
 
+    assignment = db.relationship("TeachingAssignment")
     subject = db.relationship("Subject")
     faculty = db.relationship("Faculty")
     section = db.relationship("Section")

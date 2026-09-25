@@ -46,6 +46,12 @@ class ScheduleSnapshot:
     assignments: Dict[int, dict] = field(default_factory=dict)
     # scheduled_class_id -> {assignment_id, day, start_period, length, room_id}
     classes: Dict[int, dict] = field(default_factory=dict)
+    # Phase 6E: locked-block immovability footprint. Populated from
+    # ScheduledClass.is_locked / locked_block_id when those columns are
+    # present (duck-typed getattr, so pre-6C rows simply yield empty sets).
+    # Read-only here: the validator never writes, it only refuses moves.
+    locked_class_ids: Set[int] = field(default_factory=set)
+    class_locked_block: Dict[int, int] = field(default_factory=dict)
     # (resource_key, day, period) -> booked count
     room_occ: Dict = field(default_factory=dict)
     faculty_occ: Dict = field(default_factory=dict)
@@ -121,6 +127,12 @@ def build_snapshot(days: List[str], num_periods: int, break_after: Optional[int]
         snap.classes[sc.id] = {"assignment_id": sc.assignment_id, "day": sc.day,
                                "start_period": sc.start_period,
                                "length": sc.length, "room_id": sc.room_id}
+        # Phase 6E: record the lock footprint (absent columns -> unlocked).
+        if bool(getattr(sc, "is_locked", False)):
+            snap.locked_class_ids.add(sc.id)
+            lbid = getattr(sc, "locked_block_id", None)
+            if lbid is not None:
+                snap.class_locked_block[sc.id] = lbid
         info = snap.assignments.get(sc.assignment_id)
         if info is None:
             continue
@@ -146,6 +158,8 @@ def snapshot_without(snap: ScheduleSnapshot, class_id: int) -> ScheduleSnapshot:
     """Copy of `snap` with one scheduled class's occupancy removed."""
     clone = deepcopy(snap)
     current = clone.classes.pop(class_id, None)
+    clone.locked_class_ids.discard(class_id)
+    clone.class_locked_block.pop(class_id, None)
     if not current:
         return clone
     info = clone.assignments.get(current["assignment_id"])
@@ -172,11 +186,87 @@ def snapshot_without(snap: ScheduleSnapshot, class_id: int) -> ScheduleSnapshot:
     return clone
 
 
+def check_locked_immovable(snap: ScheduleSnapshot, class_id: int, *,
+                           day: str, start_period: int, length: int,
+                           room_id: int,
+                           assignment_id=None) -> Optional[rules.RuleResult]:
+    """Phase 6E: refuse any change to a locked placement.
+
+    Returns a LOCKED_BLOCK RuleResult when `class_id` is a locked class
+    and the proposed fields differ from the stored placement (day, start,
+    length, room, or assignment/faculty reassignment). Returns None when
+    the class is unlocked or the proposal is identical (no move).
+    Details identify locked_block_id, scheduled_class_id, the attempted
+    change, and the current placement — the foundation for Phase 6H
+    manual-edit validation. No editing UI is implemented here.
+    """
+    if class_id not in snap.locked_class_ids:
+        return None
+    current = snap.classes.get(class_id)
+    if current is None:
+        return None
+    attempted = {"day": day, "start_period": start_period,
+                 "length": length, "room_id": room_id}
+    if assignment_id is not None:
+        attempted["assignment_id"] = assignment_id
+    current_view = {"day": current["day"],
+                    "start_period": current["start_period"],
+                    "length": current["length"],
+                    "room_id": current["room_id"],
+                    "assignment_id": current["assignment_id"]}
+    changed = (
+        day != current["day"]
+        or start_period != current["start_period"]
+        or length != current["length"]
+        or room_id != current["room_id"]
+        or (assignment_id is not None
+            and assignment_id != current["assignment_id"])
+    )
+    if not changed:
+        return None
+    return rules.RuleResult(
+        ok=False, code="LOCKED_BLOCK",
+        message=f"Scheduled class {class_id} is locked and cannot be moved "
+                f"(locked block {snap.class_locked_block.get(class_id)}).",
+        details={"locked_block_id": snap.class_locked_block.get(class_id),
+                 "scheduled_class_id": class_id,
+                 "attempted_change": attempted,
+                 "current": current_view})
+
+
+def validate_move(snap: ScheduleSnapshot, class_id: int, *,
+                  session_type: str, group_key: str, group_label: str,
+                  group_size: int, faculty_id: int, day: str,
+                  start_period: int, length: int, room_id: int,
+                  parent_section_key: Optional[str] = None,
+                  faculty_name: str = "?",
+                  assignment_id=None) -> List[rules.RuleResult]:
+    """Phase 6E: validate a hypothetical move of one existing class.
+
+    Locked classes are refused with LOCKED_BLOCK before any occupancy
+    check. Unlocked classes validate against a snapshot with their own
+    occupancy removed (a move must not conflict with itself).
+    """
+    locked = check_locked_immovable(
+        snap, class_id, day=day, start_period=start_period, length=length,
+        room_id=room_id, assignment_id=assignment_id)
+    if locked is not None:
+        return [locked]
+    slim = snapshot_without(snap, class_id)
+    return validate_candidate(
+        slim, session_type=session_type, group_key=group_key,
+        group_label=group_label, group_size=group_size, faculty_id=faculty_id,
+        day=day, start_period=start_period, length=length, room_id=room_id,
+        parent_section_key=parent_section_key, faculty_name=faculty_name)
+
+
 def validate_candidate(snap: ScheduleSnapshot, *, session_type: str, group_key: str,
                        group_label: str, group_size: int, faculty_id: int,
                        day: str, start_period: int, length: int, room_id: int,
                        parent_section_key: Optional[str] = None,
-                       faculty_name: str = "?") -> List[rules.RuleResult]:
+                       faculty_name: str = "?",
+                       editing_class_id: Optional[int] = None,
+                       assignment_id=None) -> List[rules.RuleResult]:
     """Check one hypothetical placement against a snapshot (existing rules only).
 
     Returns a list of failing RuleResults (empty == valid). Covers H2/H3/H4
@@ -186,7 +276,17 @@ def validate_candidate(snap: ScheduleSnapshot, *, session_type: str, group_key: 
     section/day — theory candidates only; practicals contribute 0).
     H1/H12/H14 are input/coverage-level rules and are not per-placement
     checks here.
+
+    When `editing_class_id` names a locked class, any differing placement
+    is refused with LOCKED_BLOCK (Phase 6E immovability; foundation for
+    Phase 6H). An identical placement is not a move and validates normally.
     """
+    if editing_class_id is not None:
+        locked = check_locked_immovable(
+            snap, editing_class_id, day=day, start_period=start_period,
+            length=length, room_id=room_id, assignment_id=assignment_id)
+        if locked is not None:
+            return [locked]
     failures: List[rules.RuleResult] = []
     room = snap.rooms.get(room_id)
     if room is None:

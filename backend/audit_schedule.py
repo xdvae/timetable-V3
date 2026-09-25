@@ -164,6 +164,16 @@ def load_snapshot(conn):
         lg_names[r[0]] = r[2]
         lg_sizes[r[0]] = r[3] or 0
 
+    # Phase 6E: faculty unavailability is needed to re-validate locked
+    # placements (read-only SELECT; absent column -> treat as available).
+    faculty_unavailable = {}
+    try:
+        for r in conn.execute("SELECT id, unavailable_slots FROM faculty"):
+            slots = {(t.strip()) for t in (r[1] or "").split(",") if t.strip()}
+            faculty_unavailable[r[0]] = slots
+    except sqlite3.OperationalError:
+        faculty_unavailable = {}
+
     assignments = {}
     for r in conn.execute(
             "SELECT id, faculty_id, subject_id, session_type, section_id, "
@@ -186,13 +196,69 @@ def load_snapshot(conn):
             "group_label": group_label, "group_size": group_size,
         }
 
+    # Phase 6E: lock columns + locked_block rows when the additive schema
+    # is present (missing table/columns -> legacy-compatible empty lists).
+    sc_cols = _table_cols(conn, "scheduled_class")
+    has_lock_cols = {"is_locked", "locked_block_id"} <= sc_cols
     classes = []
-    for r in conn.execute(
-            "SELECT id, assignment_id, day, start_period, length, room_id "
-            "FROM scheduled_class ORDER BY id"):
-        classes.append({"id": r[0], "assignment_id": r[1], "day": r[2],
-                        "start_period": r[3], "length": r[4],
-                        "room_id": r[5]})
+    try:
+        if has_lock_cols:
+            rows = conn.execute(
+                "SELECT id, assignment_id, day, start_period, length, room_id, "
+                "is_locked, locked_block_id FROM scheduled_class ORDER BY id")
+            for r in rows:
+                classes.append({"id": r[0], "assignment_id": r[1], "day": r[2],
+                                "start_period": r[3], "length": r[4],
+                                "room_id": r[5], "is_locked": bool(r[6]),
+                                "locked_block_id": r[7]})
+        else:
+            raise sqlite3.OperationalError("no lock columns")
+    except sqlite3.OperationalError:
+        for r in conn.execute(
+                "SELECT id, assignment_id, day, start_period, length, room_id "
+                "FROM scheduled_class ORDER BY id"):
+            classes.append({"id": r[0], "assignment_id": r[1], "day": r[2],
+                            "start_period": r[3], "length": r[4],
+                            "room_id": r[5], "is_locked": False,
+                            "locked_block_id": None})
+
+    locked_blocks = []
+    tables = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    if "locked_block" in tables:
+        lb_cols = _table_cols(conn, "locked_block")
+        has_assign = "assignment_id" in lb_cols
+        try:
+            if has_assign:
+                rows = conn.execute(
+                    "SELECT id, kind, assignment_id, subject_id, faculty_id, "
+                    "section_id, lab_group_id, day, start_period, length, "
+                    "room_id, room_locked, department, is_external "
+                    "FROM locked_block ORDER BY id")
+                for r in rows:
+                    locked_blocks.append({
+                        "id": r[0], "kind": r[1], "assignment_id": r[2],
+                        "subject_id": r[3], "faculty_id": r[4],
+                        "section_id": r[5], "lab_group_id": r[6],
+                        "day": r[7], "start_period": r[8], "length": r[9],
+                        "room_id": r[10], "room_locked": bool(r[11]),
+                        "department": r[12], "is_external": bool(r[13])})
+            else:
+                rows = conn.execute(
+                    "SELECT id, kind, subject_id, faculty_id, section_id, "
+                    "lab_group_id, day, start_period, length, room_id, "
+                    "room_locked, department, is_external "
+                    "FROM locked_block ORDER BY id")
+                for r in rows:
+                    locked_blocks.append({
+                        "id": r[0], "kind": r[1], "assignment_id": None,
+                        "subject_id": r[2], "faculty_id": r[3],
+                        "section_id": r[4], "lab_group_id": r[5],
+                        "day": r[6], "start_period": r[7], "length": r[8],
+                        "room_id": r[9], "room_locked": bool(r[10]),
+                        "department": r[11], "is_external": bool(r[12])})
+        except sqlite3.OperationalError:
+            locked_blocks = []
 
     return {
         "days": days,
@@ -201,10 +267,13 @@ def load_snapshot(conn):
         "max_consecutive": cfg[3],
         "rooms": rooms,
         "faculty_names": faculty_names,
+        "faculty_unavailable": faculty_unavailable,
         "sec_names": sec_names,
         "labgroup_section": lg_sections,
         "assignments": assignments,
         "classes": classes,
+        "locked_blocks": locked_blocks,
+        "has_lock_schema": has_lock_cols and "locked_block" in tables,
     }
 
 
@@ -220,6 +289,9 @@ def audit_snapshot(snap):
     # cell -> human-readable assignment descriptions (for messages only;
     # the validity decision comes from schedule_rules).
     cell_desc = defaultdict(list)
+    # Phase 6E: cell -> scheduled-class ids that are locked (for
+    # LOCKED_BLOCK_CONFLICT attribution; read-only bookkeeping).
+    cell_locked = defaultdict(list)
 
     def _describe(a):
         return (f"assignment {a['id']} ({a['subject_name']}, "
@@ -270,6 +342,10 @@ def audit_snapshot(snap):
             cell_desc[("room", sc["room_id"], sc["day"], p)].append(desc)
             cell_desc[("faculty", a["faculty_id"], sc["day"], p)].append(desc)
             cell_desc[("group", a["group_key"], sc["day"], p)].append(desc)
+            if sc.get("is_locked"):
+                cell_locked[("room", sc["room_id"], sc["day"], p)].append(sc["id"])
+                cell_locked[("faculty", a["faculty_id"], sc["day"], p)].append(sc["id"])
+                cell_locked[("group", a["group_key"], sc["day"], p)].append(sc["id"])
 
     def check_overlap(occ, code, label, kind):
         for res in rules.check_no_overlap(occ, code, label):
@@ -277,6 +353,13 @@ def audit_snapshot(snap):
                                res.details["day"], res.details["period"])
             ids = "; ".join(cell_desc[(kind, key, day, period)])
             problems.append(f"{label} DOUBLE-BOOKED: {(key, day)} at period {period} -> {ids}")
+            # Phase 6E: attribute overlaps touching an immutable block.
+            locked_ids = cell_locked.get((kind, key, day, period), [])
+            if locked_ids:
+                problems.append(
+                    f"LOCKED_BLOCK_CONFLICT: locked class(es) {sorted(locked_ids)} "
+                    f"overlap {label.lower()} {(key, day)} at period {period} "
+                    f"({code}).")
 
     check_overlap(room_occ, "ROOM_CONFLICT", "ROOM", "room")
     check_overlap(fac_occ, "FACULTY_CONFLICT", "FACULTY", "faculty")
@@ -336,7 +419,156 @@ def audit_snapshot(snap):
                     sec_names.get(sec_id, f"section {sec_id}"), d, sec_id):
                 problems.append(f"MAX_TWO_THEORY VIOLATION: {res.message}")
 
+    # Phase 6E: locked-block consistency (no-ops when the additive schema
+    # is absent; always read-only).
+    problems.extend(audit_locked_blocks(snap))
+
     return problems, notes
+
+
+def audit_locked_blocks(snap):
+    """Detect LockedBlock <-> ScheduledClass inconsistencies.
+
+    Covers: locked block with no class, class pointing at a missing block,
+    is_locked flag missing, day/start/length mismatch, room mismatch,
+    faculty/assignment mismatch, and locked placements violating a hard
+    rule (re-checked through schedule_rules). Pure + read-only.
+    """
+    problems = []
+    blocks = snap.get("locked_blocks", []) or []
+    if not snap.get("has_lock_schema", False) and not blocks:
+        return problems
+    by_block = defaultdict(list)  # locked_block_id -> [class dicts]
+    for sc in snap["classes"]:
+        lbid = sc.get("locked_block_id")
+        if lbid is not None:
+            by_block[lbid].append(sc)
+    block_ids = {lb["id"] for lb in blocks}
+    for sc in snap["classes"]:
+        lbid = sc.get("locked_block_id")
+        if lbid is not None and lbid not in block_ids:
+            problems.append(
+                f"LOCKED_BLOCK_MISSING: scheduled class {sc['id']} points to "
+                f"missing locked block {lbid}.")
+        if lbid is not None and not sc.get("is_locked"):
+            problems.append(
+                f"LOCKED_FLAG_MISSING: scheduled class {sc['id']} references "
+                f"locked block {lbid} but is not marked is_locked.")
+    for lb in blocks:
+        linked = by_block.get(lb["id"], [])
+        if not linked:
+            problems.append(
+                f"LOCKED_BLOCK_ORPHAN: locked block {lb['id']} ({lb['day']} "
+                f"period {lb['start_period']} x{lb['length']}) has no "
+                f"scheduled class; the timetable view is missing its placement.")
+            continue
+        if len(linked) > 1:
+            problems.append(
+                f"LOCKED_BLOCK_DUPLICATE: locked block {lb['id']} has "
+                f"{len(linked)} scheduled classes "
+                f"{sorted(c['id'] for c in linked)}; exactly one is allowed.")
+        for sc in linked:
+            a = snap["assignments"].get(sc["assignment_id"])
+            if (sc["day"] != lb["day"]
+                    or sc["start_period"] != lb["start_period"]
+                    or sc["length"] != lb["length"]):
+                problems.append(
+                    f"LOCKED_BLOCK_MISMATCH: locked block {lb['id']} says "
+                    f"{lb['day']} period {lb['start_period']} x{lb['length']} "
+                    f"but scheduled class {sc['id']} is {sc['day']} period "
+                    f"{sc['start_period']} x{sc['length']}.")
+            if lb.get("room_id") is not None and sc["room_id"] != lb["room_id"]:
+                problems.append(
+                    f"LOCKED_ROOM_MISMATCH: locked block {lb['id']} fixes room "
+                    f"{lb['room_id']} but scheduled class {sc['id']} uses room "
+                    f"{sc['room_id']}.")
+            if (lb.get("assignment_id") is not None
+                    and sc["assignment_id"] != lb["assignment_id"]):
+                problems.append(
+                    f"LOCKED_ASSIGNMENT_MISMATCH: locked block {lb['id']} pins "
+                    f"assignment {lb['assignment_id']} but scheduled class "
+                    f"{sc['id']} places assignment {sc['assignment_id']}.")
+            if a is not None:
+                if a["faculty_id"] != lb["faculty_id"]:
+                    problems.append(
+                        f"LOCKED_ASSIGNMENT_MISMATCH: locked block {lb['id']} "
+                        f"names faculty {lb['faculty_id']} but its class "
+                        f"{sc['id']} (assignment {a['id']}) uses faculty "
+                        f"{a['faculty_id']}.")
+                if a["session_type"] == "practical":
+                    if lb.get("lab_group_id") != a["lab_group_id"]:
+                        problems.append(
+                            f"LOCKED_ASSIGNMENT_MISMATCH: locked block {lb['id']} "
+                            f"names lab group {lb.get('lab_group_id')} but class "
+                            f"{sc['id']} uses {a['lab_group_id']}.")
+                elif lb.get("section_id") != a["section_id"]:
+                    problems.append(
+                        f"LOCKED_ASSIGNMENT_MISMATCH: locked block {lb['id']} "
+                        f"names section {lb.get('section_id')} but class "
+                        f"{sc['id']} uses {a['section_id']}.")
+            # Re-validate the locked placement against hard rules.
+            if a is not None:
+                res = rules.check_day_known(lb["day"], snap["days"])
+                if not res.ok:
+                    problems.append(
+                        f"LOCKED_BLOCK_RULE_VIOLATION: locked block {lb['id']} "
+                        f"violates UNKNOWN_DAY: {res.message}")
+                res = rules.check_block_geometry(
+                    lb["start_period"], lb["length"], snap["num_periods"])
+                if not res.ok:
+                    problems.append(
+                        f"LOCKED_BLOCK_RULE_VIOLATION: locked block {lb['id']} "
+                        f"violates PERIOD_OUT_OF_RANGE: {res.message}")
+                res = rules.check_break_geometry(
+                    lb["start_period"], lb["length"], snap["break_after"])
+                if not res.ok:
+                    problems.append(
+                        f"LOCKED_BLOCK_RULE_VIOLATION: locked block {lb['id']} "
+                        f"violates BREAK_SPAN: {res.message}")
+                room = snap["rooms"].get(lb["room_id"]) if lb.get("room_id") else None
+                if lb.get("room_id") is not None and room is not None:
+                    res = rules.check_room_compatible(
+                        room["room_type"], room["capacity"],
+                        room["equipment_count"], a["session_type"],
+                        a["group_size"], room_name=room["name"],
+                        group_label=a["group_label"])
+                    if not res.ok:
+                        problems.append(
+                            f"LOCKED_BLOCK_RULE_VIOLATION: locked block {lb['id']} "
+                            f"violates {res.code}: {res.message}")
+                unavail = (snap.get("faculty_unavailable", {}) or {}).get(
+                    lb["faculty_id"], set())
+                res = rules.check_faculty_available(
+                    unavail, lb["day"], lb["start_period"], lb["length"])
+                if not res.ok:
+                    problems.append(
+                        f"LOCKED_BLOCK_RULE_VIOLATION: locked block {lb['id']} "
+                        f"violates FACULTY_UNAVAILABLE: {res.message}")
+    return problems
+
+
+def report_6e_footprint(conn):
+    """Explicit NOTE when the Phase 6E assignment-link column is absent.
+
+    Never migrates or repairs; a 6C-schema database stays auditable for
+    locked blocks on its legacy columns.
+    """
+    try:
+        tables = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+    except Exception:
+        return ""
+    if "locked_block" not in tables:
+        return ""
+    try:
+        cols = _table_cols(conn, "locked_block")
+    except Exception:
+        return ""
+    if "assignment_id" not in cols:
+        return ("NOTE: locked_block table is missing the Phase 6E "
+                "assignment_id column. Auditing locked blocks on legacy "
+                "columns only; no migration was performed.")
+    return ""
 
 
 def run_audit(db_path):
@@ -361,6 +593,11 @@ def run_audit(db_path):
                   "(see backend/migrate.py --help).")
             return 2, []
         note = report_6c_footprint(conn)
+        note_6e = report_6e_footprint(conn)
+        if note_6e and note:
+            note = note + "\n" + note_6e
+        elif note_6e:
+            note = note_6e
         snap = load_snapshot(conn)
     # Connection closed before analysis: the audit holds a plain snapshot.
     conn.close()
