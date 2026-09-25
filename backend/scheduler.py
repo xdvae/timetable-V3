@@ -110,6 +110,76 @@ def valid_starts(length, num_periods, break_after):
     return rule_valid_starts(length, num_periods, break_after)
 
 
+def normalize_preferred_rooms(preferred_theory_rooms, rooms):
+    """Clean a section -> preferred-room side map for the solver.
+
+    Keeps only {int section_id: int room_id} pairs whose room exists in
+    `rooms`. Drops None values, unknown room ids (e.g. a room deleted
+    after configuration), and non-integer junk. A dropped entry behaves
+    exactly like no preference. Pure (no ORM/IO); never affects hard
+    room validation, which stays in `compatible_rooms`.
+    """
+    known = set()
+    for r in rooms or []:
+        try:
+            known.add(int(getattr(r, "id", None)))
+        except (TypeError, ValueError):
+            continue
+    clean = {}
+    for section_id, room_id in dict(preferred_theory_rooms or {}).items():
+        try:
+            sid, rid = int(section_id), int(room_id)
+        except (TypeError, ValueError):
+            continue
+        if rid in known:
+            clean[sid] = rid
+    return clean
+
+
+def preferred_room_penalty(session, room_id, preferred_theory_rooms):
+    """Soft 0/1 penalty for one candidate placement (Phase 6I).
+
+    Returns 0 when the candidate uses the session section's preferred
+    theory room, 1 when the section maps to a *different* room, and 0
+    for every session the preference must not touch: non-theory
+    sessions, lab-group practicals, specialization sessions, sessions
+    without a parseable section, and sections with no mapped preference
+    (including a mapped-away incompatible room, which simply yields a
+    uniform per-session constant that cannot change the optimum).
+    Pure: operates on the session dict + room id only.
+    """
+    if not preferred_theory_rooms:
+        return 0
+    if session.get("session_type") != "theory":
+        return 0
+    group_key = session.get("group_key", "") or ""
+    if not group_key.startswith("section:"):
+        return 0
+    try:
+        section_id = int(group_key.split(":", 1)[1])
+    except (ValueError, IndexError):
+        return 0
+    preferred = preferred_theory_rooms.get(section_id)
+    if preferred is None:
+        return 0
+    try:
+        if int(room_id) == int(preferred):
+            return 0
+    except (TypeError, ValueError):
+        return 0
+    return 1
+
+
+def preferred_time_scale(num_sessions):
+    """Start-period multiplier that keeps time-compactness strictly primary.
+
+    Invariant: one start-period unit (worth `num_sessions + 1`) always
+    outweighs every possible preferred-room improvement combined (at most
+    `num_sessions`, since each session contributes at most penalty 1).
+    """
+    return (num_sessions or 0) + 1
+
+
 def _residual_assignments(assignments, locked_periods):
     """Copies of assignments with locked periods subtracted from demand.
 
@@ -266,7 +336,8 @@ def _locked_occupancy(locked_placements):
 
 def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
                    break_after, max_consecutive, time_limit_seconds=30,
-                   locked_placements=None, specialization_data=None):
+                   locked_placements=None, specialization_data=None,
+                   preferred_theory_rooms=None):
     """
     faculty_unavailable: dict faculty_id -> set of "day:period" strings
     locked_placements: optional list of fixed dicts, each with
@@ -283,6 +354,13 @@ def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
         per session index); section occupancy counts once per cohort;
         HN1 counts spec theory once per section. When None/empty the
         encoding is identical to Phase 6E.
+    preferred_theory_rooms: optional {section_id: room_id} home-room map
+        (Phase 6I). Adds a strictly subordinate soft objective term that
+        prefers a section's whole-section theory sessions in its mapped
+        room. Never a constraint: candidate domains and every hard rule
+        are unchanged, so feasibility is identical with or without the
+        map. When None/empty the encoding (and optimum) is identical to
+        the no-preference solver.
     Returns: (status_str, list_of_placements) where each placement is
              {assignment_id, seq, day, start_period, length, room_id}
              or (status_str, []) / (status_str, None) with a message on failure.
@@ -898,12 +976,27 @@ def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
                             f"locked theory blocks violate MAX_TWO_THEORY "
                             f"({sec_key} on {d}, periods {list(window)}).")
 
-    # ---- Soft objective: minimize start periods (compact + early-finish) ----
+    # ---- Soft objective: minimize start periods (compact + early-finish),
+    # with a strictly subordinate preferred-theory-room tie-break (6I) ----
+    # time_scale = #sessions + 1 (see preferred_time_scale): one
+    # start-period unit always outweighs every possible preferred-room
+    # improvement combined, so time-compactness dominates exactly as
+    # before and the preference only arbitrates among time-equal
+    # alternatives. Penalty is 0/1 per placement (whole-section theory
+    # with a mapped preference only; 0 elsewhere). Domains and hard
+    # constraints are untouched: feasibility is identical with or without
+    # the map, and locked placements (constants, never variables) plus
+    # specialization sessions (never eligible) are unaffected.
+    preferred_map = normalize_preferred_rooms(preferred_theory_rooms, rooms)
+    time_scale = preferred_time_scale(len(sessions))
     objective_terms = []
     for s_idx, sess in enumerate(sessions):
         for (d, start, r) in session_options[s_idx]:
             # squared-ish weighting via linear scale keeps it simple & fast for CP-SAT
-            objective_terms.append(start * x[(s_idx, d, start, r)])
+            objective_terms.append(
+                (start * time_scale
+                 + preferred_room_penalty(sess, r, preferred_map))
+                * x[(s_idx, d, start, r)])
     model.Minimize(sum(objective_terms))
 
     solver = cp_model.CpSolver()

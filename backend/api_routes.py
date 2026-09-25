@@ -1111,6 +1111,20 @@ def api_schedule_run():
                            if (info.get("section_ids") and
                                (info.get("total_students", 0) or 0) > 0)}
 
+    # Phase 6I: section home-room preferences enter the solver as a
+    # strictly subordinate soft objective (never a constraint). Dangling
+    # ids (room deleted after configuration) are dropped by the
+    # scheduler normalizer; a missing column on legacy databases means
+    # no preferences at all.
+    try:
+        preferred_theory_rooms = {
+            s.id: s.preferred_theory_room_id
+            for s in Section.query.all()
+            if getattr(s, "preferred_theory_room_id", None) is not None
+        }
+    except Exception:
+        preferred_theory_rooms = {}
+
     status, placements, message = run_scheduler(
         assignments, rooms, faculty_unavail, days, len(periods),
         cfg.break_after_periods if cfg.break_after_periods else None,
@@ -1118,6 +1132,7 @@ def api_schedule_run():
         time_limit_seconds=30,
         locked_placements=locked_placements,
         specialization_data=specialization_data,
+        preferred_theory_rooms=preferred_theory_rooms,
     )
 
     if status in ("INFEASIBLE", "NO_SESSIONS"):
