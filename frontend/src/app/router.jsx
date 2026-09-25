@@ -6,7 +6,7 @@ import { LoginPage } from "@/pages/Login/LoginPage.jsx";
 import { DashboardPage } from "@/pages/Dashboard/DashboardPage.jsx";
 import { ConfigPage } from "@/pages/Config/ConfigPage.jsx";
 import { RoomsPage } from "@/pages/Rooms/RoomsPage.jsx";
-import { FacultyAvailabilityPage, FacultyPage } from "@/pages/Faculty/FacultyPage.jsx";
+import { FacultyAvailabilityPage, FacultyPage, FacultyPreferencesPage } from "@/pages/Faculty/FacultyPage.jsx";
 import { ProgramsPage } from "@/pages/Programs/ProgramsPage.jsx";
 import { EnrollmentsPage, SectionsPage } from "@/pages/Enrollments/EnrollmentsPage.jsx";
 import { SubjectsPage } from "@/pages/Subjects/SubjectsPage.jsx";
@@ -36,6 +36,7 @@ export const router = createBrowserRouter([
       { path: "rooms", element: <RoomsPage /> },
       { path: "faculty", element: <FacultyPage /> },
       { path: "faculty/:fid/availability", element: <FacultyAvailabilityPage /> },
+      { path: "faculty/:fid/preferences", element: <FacultyPreferencesPage /> },
       { path: "programs", element: <ProgramsPage /> },
       { path: "enrollments", element: <EnrollmentsPage /> },
       { path: "enrollments/:eid/sections", element: <SectionsPage /> },

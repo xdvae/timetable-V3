@@ -37,3 +37,38 @@ export function getFacultyAvailability(fid) {
 export function saveFacultyAvailability(fid, unavailable) {
   return api.post(`/api/faculty/${fid}/availability`, { unavailable });
 }
+
+/**
+ * GET /api/faculty/<fid>/preferences → { faculty, days[], periods[],
+ *   num_periods, preferences: [{ id, faculty_id, kind, days[], start_period,
+ *   end_period, weight, is_hard, enabled }] } (live shape).
+ */
+export function getFacultyPreferences(fid) {
+  return api.get(`/api/faculty/${fid}/preferences`);
+}
+
+/**
+ * POST /api/faculty/<fid>/preferences { kind, days?, start_period?,
+ * end_period?, weight?, enabled? } → 201 { ok, message, preference }.
+ * Soft-only: is_hard=true is rejected; SUBJECT_AFFINITY is rejected as
+ * unsupported. Never regenerates the timetable. 404 UNKNOWN_FACULTY
+ * when missing; 422 carries field_errors for invalid input.
+ */
+export function createFacultyPreference(fid, payload) {
+  return api.post(`/api/faculty/${fid}/preferences`, payload);
+}
+
+/**
+ * POST /api/faculty/preferences/<pid> (partial fields) →
+ * 200 { ok, message, preference }. Explicit null clears a period bound
+ * (needed to change kinds). Never regenerates the timetable.
+ * 404 UNKNOWN_PREFERENCE when missing.
+ */
+export function updateFacultyPreference(preferenceId, payload) {
+  return api.post(`/api/faculty/preferences/${preferenceId}`, payload);
+}
+
+/** POST /api/faculty/preferences/<pid>/delete → 200 { ok, message }. */
+export function deleteFacultyPreference(preferenceId) {
+  return api.post(`/api/faculty/preferences/${preferenceId}/delete`);
+}

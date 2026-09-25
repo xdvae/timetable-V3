@@ -154,7 +154,11 @@ returning `{ok, message, …}` on success and `{error, field_errors?}` with 4xx 
 validation failure. Section payloads expose `preferred_theory_room_id` (null when unset);
 `POST /api/sections/<sid>/preferred-room` with `{room_id}` (or null to clear) configures a
 section's soft home-room preference for future timetable generations — it never regenerates
-or moves the current timetable. Timetable downloads (Excel/CSV/printable HTML via `/export/*`) and
+or moves the current timetable. Faculty soft scheduling preferences
+(`GET|POST /api/faculty/<fid>/preferences`, `POST /api/faculty/preferences/<pid>`,
+`POST /api/faculty/preferences/<pid>/delete`) configure per-faculty `TIME_WINDOW` /
+`DAY_OFF_PREFERENCE` hints — soft-only (hard blocks stay on the availability grid),
+future-generations-only, never rescheduling anything. Timetable downloads (Excel/CSV/printable HTML via `/export/*`) and
 sample CSVs (`/import/sample/*`) are same-origin download routes, which React calls
 directly.
 
@@ -236,8 +240,9 @@ use the same-origin download routes).
 - [x] Dashboard (`/`)
 - [x] Config (`/config`, read + write)
 - [x] Rooms (`/rooms`, create + delete)
-- [x] Faculty (`/faculty`, create + delete, links to availability)
+- [x] Faculty (`/faculty`, create + delete, links to availability and soft scheduling preferences)
 - [x] Faculty availability (`/faculty/:fid/availability`, read + write)
+- [x] Faculty preferences (`/faculty/:fid/preferences`, soft `TIME_WINDOW` / day-off hints for future generations)
 - [x] Programs (`/programs`, create + delete)
 - [x] Enrollments (`/enrollments`, create + delete, auto-generated sections)
 - [x] Sections (`/enrollments/:eid/sections`, read-only)

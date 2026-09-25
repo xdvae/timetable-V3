@@ -1,9 +1,10 @@
 import { useCallback, useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
-import { ArrowLeft, CalendarClock, Plus, Trash2, Users } from "lucide-react";
+import { ArrowLeft, CalendarClock, Plus, SlidersHorizontal, Trash2, Users } from "lucide-react";
 
 import { Page, Panel } from "@/components/layout/page.jsx";
 import { EmptyState, PageLoading, QueryError } from "@/components/feedback/data-states.jsx";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert.jsx";
 import { Badge } from "@/components/ui/badge.jsx";
 import { Button } from "@/components/ui/button.jsx";
 import {
@@ -31,16 +32,21 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table.jsx";
-import { DeleteConfirmDialog, FieldError, MutationError } from "@/components/feedback/mutation.jsx";
+import { DeleteConfirmDialog, FailureList, FieldError, MutationError } from "@/components/feedback/mutation.jsx";
 import { useApi } from "@/hooks/use-api.js";
 import { useMutation } from "@/hooks/use-mutation.js";
 import { useToast } from "@/hooks/use-toast.js";
+import { getFailures } from "@/lib/failures.js";
 import {
   createFaculty,
+  createFacultyPreference,
   deleteFaculty,
+  deleteFacultyPreference,
   getFaculty,
   getFacultyAvailability,
+  getFacultyPreferences,
   saveFacultyAvailability,
+  updateFacultyPreference,
 } from "@/services/api/faculty.js";
 import { cn } from "@/lib/utils";
 
@@ -207,7 +213,7 @@ export function FacultyPage() {
 
   if (isLoading && !faculty) {
     return (
-      <Page title="Faculty" subtitle="Roster, weekly loads, and availability.">
+      <Page title="Faculty" subtitle="Roster, weekly loads, availability, and soft scheduling preferences.">
         <PageLoading rows={6} label="Loading faculty…" />
       </Page>
     );
@@ -215,7 +221,7 @@ export function FacultyPage() {
 
   if (error && !faculty) {
     return (
-      <Page title="Faculty" subtitle="Roster, weekly loads, and availability.">
+      <Page title="Faculty" subtitle="Roster, weekly loads, availability, and soft scheduling preferences.">
         <QueryError error={error} onRetry={retry} />
       </Page>
     );
@@ -224,7 +230,7 @@ export function FacultyPage() {
   return (
     <Page
       title="Faculty"
-      subtitle={faculty.length === 0 ? "Roster, weekly loads, and availability." : `${faculty.length} faculty members`}
+      subtitle={faculty.length === 0 ? "Roster, weekly loads, availability, and soft scheduling preferences." : `${faculty.length} faculty members`}
       actions={
         <Button onClick={openAddDialog}>
           <Plus aria-hidden="true" />
@@ -275,6 +281,12 @@ export function FacultyPage() {
                         <Link to={`/faculty/${member.id}/availability`} aria-label={`Availability for ${member.name}`}>
                           <CalendarClock aria-hidden="true" />
                           Availability
+                        </Link>
+                      </Button>
+                      <Button asChild variant="outline" size="sm">
+                        <Link to={`/faculty/${member.id}/preferences`} aria-label={`Scheduling preferences for ${member.name}`}>
+                          <SlidersHorizontal aria-hidden="true" />
+                          Preferences
                         </Link>
                       </Button>
                       <Button
@@ -440,6 +452,535 @@ export function FacultyAvailabilityPage() {
           </div>
         </Panel>
       </form>
+    </Page>
+  );
+}
+
+const PREFERENCE_KINDS = [
+  { value: "TIME_WINDOW", label: "Preferred time window" },
+  { value: "DAY_OFF_PREFERENCE", label: "Preferred day off" },
+];
+
+function preferenceKindLabel(kind) {
+  return PREFERENCE_KINDS.find((k) => k.value === kind)?.label ?? kind;
+}
+
+/**
+ * Plain-language summary of one stored preference. Period indexes are
+ * rendered with their configured time labels so administrators never
+ * have to guess what "period 2" means.
+ */
+function describePreference(pref, periods) {
+  const days = (pref.days ?? []).join(", ") || "all working days";
+  if (pref.kind === "DAY_OFF_PREFERENCE") {
+    return `Prefers no teaching on ${days}.`;
+  }
+  const label = (index) => {
+    const text = periods?.[index];
+    return text ? `period ${index} (${text})` : `period ${index}`;
+  };
+  return `Prefers teaching ${label(pref.start_period)} – ${label(pref.end_period)} (end-exclusive) on ${days}.`;
+}
+
+function PreferenceFormFields({
+  kind,
+  onKindChange,
+  selectedDays,
+  onToggleDay,
+  startPeriod,
+  onStartChange,
+  endPeriod,
+  onEndChange,
+  weight,
+  onWeightChange,
+  enabled,
+  onEnabledChange,
+  allDays,
+  periods,
+  fieldErrors,
+  disabled,
+  idPrefix,
+}) {
+  return (
+    <div className="space-y-4">
+      <div>
+        <Label htmlFor={`${idPrefix}-kind`}>Preference kind</Label>
+        <Select value={kind} onValueChange={onKindChange} disabled={disabled}>
+          <SelectTrigger id={`${idPrefix}-kind`} className="mt-1.5">
+            <SelectValue placeholder="Select a kind" />
+          </SelectTrigger>
+          <SelectContent>
+            {PREFERENCE_KINDS.map((k) => (
+              <SelectItem key={k.value} value={k.value}>
+                {k.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <FieldError id={`${idPrefix}-kind-error`} message={fieldErrors.preference} />
+      </div>
+      <fieldset disabled={disabled}>
+        <legend className="text-sm font-medium text-ink">
+          {kind === "DAY_OFF_PREFERENCE" ? "Days off (at least one)" : "Days (blank means all working days)"}
+        </legend>
+        <div className="mt-1.5 flex flex-wrap gap-2">
+          {allDays.map((day) => (
+            <label
+              key={day}
+              className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-sm"
+            >
+              <input
+                type="checkbox"
+                className="size-4 accent-[#B8873A]"
+                checked={selectedDays.has(day)}
+                onChange={() => onToggleDay(day)}
+                aria-label={`Include ${day}`}
+              />
+              {day}
+            </label>
+          ))}
+        </div>
+      </fieldset>
+      {kind === "TIME_WINDOW" ? (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <Label htmlFor={`${idPrefix}-start`}>From period</Label>
+            <Select value={startPeriod} onValueChange={onStartChange} disabled={disabled}>
+              <SelectTrigger id={`${idPrefix}-start`} className="mt-1.5">
+                <SelectValue placeholder="Start period" />
+              </SelectTrigger>
+              <SelectContent>
+                {periods.map((period, index) => (
+                  <SelectItem key={`${period}-${index}`} value={String(index)}>
+                    {index} — {period}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label htmlFor={`${idPrefix}-end`}>To period (exclusive)</Label>
+            <Select value={endPeriod} onValueChange={onEndChange} disabled={disabled}>
+              <SelectTrigger id={`${idPrefix}-end`} className="mt-1.5">
+                <SelectValue placeholder="End period" />
+              </SelectTrigger>
+              <SelectContent>
+                {periods.map((period, index) => (
+                  <SelectItem key={`${period}-${index}`} value={String(index)}>
+                    {index} — {period}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      ) : null}
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div>
+          <Label htmlFor={`${idPrefix}-weight`}>Weight (1–10)</Label>
+          <Select value={String(weight)} onValueChange={(next) => onWeightChange(Number(next))} disabled={disabled}>
+            <SelectTrigger id={`${idPrefix}-weight`} className="mt-1.5">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {Array.from({ length: 10 }, (_, i) => i + 1).map((w) => (
+                <SelectItem key={w} value={String(w)}>
+                  {w}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Stored for future prioritization; every preference currently counts equally.
+          </p>
+        </div>
+        <div className="flex items-end pb-1">
+          <label className="inline-flex cursor-pointer items-center gap-2 text-sm font-medium text-ink">
+            <input
+              type="checkbox"
+              className="size-4 accent-[#B8873A]"
+              checked={enabled}
+              onChange={(e) => onEnabledChange(e.target.checked)}
+              disabled={disabled}
+            />
+            Enabled (disabled preferences are ignored)
+          </label>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function usePreferenceDraft(initial) {
+  const [kind, setKind] = useState(initial?.kind ?? "TIME_WINDOW");
+  const [selectedDays, setSelectedDays] = useState(() => new Set(initial?.days ?? []));
+  const [startPeriod, setStartPeriod] = useState(
+    initial?.start_period == null ? "" : String(initial.start_period)
+  );
+  const [endPeriod, setEndPeriod] = useState(
+    initial?.end_period == null ? "" : String(initial.end_period)
+  );
+  const [weight, setWeight] = useState(initial?.weight ?? 5);
+  const [enabled, setEnabled] = useState(initial?.enabled ?? true);
+
+  function toggleDay(day) {
+    setSelectedDays((prev) => {
+      const next = new Set(prev);
+      if (next.has(day)) next.delete(day);
+      else next.add(day);
+      return next;
+    });
+  }
+
+  function toPayload() {
+    const payload = {
+      kind,
+      days: [...selectedDays],
+      weight,
+      enabled,
+    };
+    if (kind === "TIME_WINDOW") {
+      payload.start_period = startPeriod === "" ? null : Number(startPeriod);
+      payload.end_period = endPeriod === "" ? null : Number(endPeriod);
+    } else {
+      payload.start_period = null;
+      payload.end_period = null;
+    }
+    return payload;
+  }
+
+  return {
+    kind, setKind, selectedDays, toggleDay,
+    startPeriod, setStartPeriod, endPeriod, setEndPeriod,
+    weight, setWeight, enabled, setEnabled, toPayload,
+  };
+}
+
+function AddPreferenceDialog({ open, onOpenChange, facultyId, allDays, periods, onSaved }) {
+  const toast = useToast();
+  const { execute, isSubmitting, error, fieldErrors } = useMutation((payload) =>
+    createFacultyPreference(facultyId, payload)
+  );
+  const draft = usePreferenceDraft(null);
+  const failures = getFailures(error);
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    const result = await execute(draft.toPayload());
+    if (result.ok) {
+      toast.success(result.data.message || "Preference saved.");
+      onOpenChange(false);
+      onSaved();
+    } else if (result.error) {
+      toast.error(result.error.message || "Could not save preference.");
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={isSubmitting ? undefined : onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Add preference</DialogTitle>
+          <DialogDescription>
+            A soft scheduling hint for future timetable generations. It can never block a
+            valid placement.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {failures.length > 0 ? (
+            <FailureList failures={failures} />
+          ) : (
+            <MutationError error={error && !error.fieldErrors ? error : null} />
+          )}
+          <PreferenceFormFields
+            idPrefix="pref-add"
+            kind={draft.kind}
+            onKindChange={draft.setKind}
+            selectedDays={draft.selectedDays}
+            onToggleDay={draft.toggleDay}
+            startPeriod={draft.startPeriod}
+            onStartChange={draft.setStartPeriod}
+            endPeriod={draft.endPeriod}
+            onEndChange={draft.setEndPeriod}
+            weight={draft.weight}
+            onWeightChange={draft.setWeight}
+            enabled={draft.enabled}
+            onEnabledChange={draft.setEnabled}
+            allDays={allDays}
+            periods={periods}
+            fieldErrors={fieldErrors}
+            disabled={isSubmitting}
+          />
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={isSubmitting}>
+              {isSubmitting ? "Saving…" : "Save Preference"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditPreferenceDialog({ preference, onOpenChange, allDays, periods, onSaved }) {
+  const toast = useToast();
+  const { execute, isSubmitting, error, fieldErrors } = useMutation((payload) =>
+    updateFacultyPreference(preference.id, payload)
+  );
+  const draft = usePreferenceDraft(preference);
+  const failures = getFailures(error);
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    const result = await execute(draft.toPayload());
+    if (result.ok) {
+      toast.success(result.data.message || "Preference updated.");
+      onOpenChange(false);
+      onSaved();
+    } else if (result.error) {
+      toast.error(result.error.message || "Could not update preference.");
+    }
+  }
+
+  return (
+    <Dialog open={preference !== null} onOpenChange={isSubmitting ? undefined : () => onOpenChange(null)}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Edit preference</DialogTitle>
+          <DialogDescription>
+            Changes apply to future timetable generations; the current timetable is
+            unchanged.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {failures.length > 0 ? (
+            <FailureList failures={failures} />
+          ) : (
+            <MutationError error={error && !error.fieldErrors ? error : null} />
+          )}
+          <PreferenceFormFields
+            idPrefix={`pref-edit-${preference.id}`}
+            kind={draft.kind}
+            onKindChange={draft.setKind}
+            selectedDays={draft.selectedDays}
+            onToggleDay={draft.toggleDay}
+            startPeriod={draft.startPeriod}
+            onStartChange={draft.setStartPeriod}
+            endPeriod={draft.endPeriod}
+            onEndChange={draft.setEndPeriod}
+            weight={draft.weight}
+            onWeightChange={draft.setWeight}
+            enabled={draft.enabled}
+            onEnabledChange={draft.setEnabled}
+            allDays={allDays}
+            periods={periods}
+            fieldErrors={fieldErrors}
+            disabled={isSubmitting}
+          />
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(null)} disabled={isSubmitting}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={isSubmitting}>
+              {isSubmitting ? "Saving…" : "Save Changes"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export function FacultyPreferencesPage() {
+  const toast = useToast();
+  const { fid } = useParams();
+  const fetcher = useCallback(() => getFacultyPreferences(fid), [fid]);
+  const { data, error, isLoading, retry } = useApi(fetcher);
+  const [addOpen, setAddOpen] = useState(false);
+  const [addKey, setAddKey] = useState(0);
+  const [editing, setEditing] = useState(null);
+  const [pendingDelete, setPendingDelete] = useState(null);
+  const deletion = useMutation(deleteFacultyPreference);
+
+  async function handleDelete() {
+    if (!pendingDelete) return;
+    const result = await deletion.execute(pendingDelete.id);
+    if (result.ok) {
+      toast.success(result.data.message || "Preference deleted.");
+      setPendingDelete(null);
+      retry();
+    } else if (result.error) {
+      toast.error(result.error.message || "Could not delete preference.");
+    }
+  }
+
+  if (isLoading && !data) {
+    return (
+      <Page
+        title="Faculty Preferences"
+        subtitle="Soft scheduling hints for one faculty member."
+        breadcrumbs={[{ label: "Faculty", to: "/faculty" }, { label: "Preferences" }]}
+      >
+        <PageLoading rows={5} label="Loading preferences…" />
+      </Page>
+    );
+  }
+
+  if (error && !data) {
+    return (
+      <Page
+        title="Faculty Preferences"
+        subtitle="Soft scheduling hints for one faculty member."
+        breadcrumbs={[{ label: "Faculty", to: "/faculty" }, { label: "Preferences" }]}
+      >
+        <QueryError error={error} onRetry={retry} />
+      </Page>
+    );
+  }
+
+  const facultyName = data.faculty?.name ?? "Faculty";
+  const allDays = data.days ?? [];
+  const periods = data.periods ?? [];
+  const preferences = data.preferences ?? [];
+
+  return (
+    <Page
+      title={`Preferences — ${facultyName}`}
+      subtitle={`${preferences.length} soft preference${preferences.length === 1 ? "" : "s"} (future generations only)`}
+      breadcrumbs={[{ label: "Faculty", to: "/faculty" }, { label: facultyName }]}
+      actions={
+        <Button
+          onClick={() => {
+            setAddKey((key) => key + 1);
+            setAddOpen(true);
+          }}
+        >
+          <Plus aria-hidden="true" />
+          Add Preference
+        </Button>
+      }
+    >
+      <Alert variant="info" className="mb-4">
+        <SlidersHorizontal aria-hidden="true" />
+        <AlertTitle>Soft preferences — not unavailability</AlertTitle>
+        <AlertDescription>
+          Preferences only nudge <strong>future</strong> timetable generations toward
+          convenient slots; a class may still be scheduled outside a preference when
+          nothing better fits, and saving here never moves the current timetable. Hard
+          blocks stay on the{" "}
+          <Link className="underline" to={`/faculty/${fid}/availability`}>
+            availability grid
+          </Link>
+          , where a checked slot can never hold a class.
+        </AlertDescription>
+      </Alert>
+      {preferences.length === 0 ? (
+        <EmptyState
+          icon={SlidersHorizontal}
+          title="No preferences yet"
+          description="Add a preferred time window or a preferred day off. The scheduler treats them as hints, never as hard rules."
+          action={
+            <Button
+              onClick={() => {
+                setAddKey((key) => key + 1);
+                setAddOpen(true);
+              }}
+              className="mt-2"
+            >
+              <Plus aria-hidden="true" />
+              Add Preference
+            </Button>
+          }
+        />
+      ) : (
+        <Panel accent="brass" title="Configured preferences">
+          <Table aria-label={`Scheduling preferences for ${facultyName}`}>
+            <TableHeader>
+              <TableRow>
+                <TableHead scope="col">Kind</TableHead>
+                <TableHead scope="col">Preference</TableHead>
+                <TableHead scope="col">Status</TableHead>
+                <TableHead scope="col">
+                  <span className="sr-only">Actions</span>
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {preferences.map((pref) => (
+                <TableRow key={pref.id}>
+                  <TableCell className="font-medium text-ink">{preferenceKindLabel(pref.kind)}</TableCell>
+                  <TableCell>{describePreference(pref, periods)}</TableCell>
+                  <TableCell>
+                    <Badge variant={pref.enabled ? "secondary" : "outline"}>
+                      {pref.enabled ? "Enabled" : "Disabled"}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex justify-end gap-2">
+                      <Button variant="outline" size="sm" onClick={() => setEditing(pref)}>
+                        Edit
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setPendingDelete(pref)}
+                        aria-label={`Delete preference ${preferenceKindLabel(pref.kind)}`}
+                      >
+                        <Trash2 aria-hidden="true" className="text-signal" />
+                        Delete
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+          <p className="mt-3 text-xs text-muted-foreground">
+            Preferences affect future schedule generation, not the already-generated
+            timetable. Moving a class away from a preference in the timetable editor
+            remains valid.
+          </p>
+        </Panel>
+      )}
+      <AddPreferenceDialog
+        key={addKey}
+        open={addOpen}
+        onOpenChange={setAddOpen}
+        facultyId={fid}
+        allDays={allDays}
+        periods={periods}
+        onSaved={retry}
+      />
+      {editing ? (
+        <EditPreferenceDialog
+          key={editing.id}
+          preference={editing}
+          onOpenChange={(next) => {
+            if (next === null) setEditing(null);
+          }}
+          allDays={allDays}
+          periods={periods}
+          onSaved={retry}
+        />
+      ) : null}
+      <DeleteConfirmDialog
+        open={pendingDelete !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPendingDelete(null);
+            deletion.reset();
+          }
+        }}
+        title="Delete this preference?"
+        description="The scheduler will no longer consider it in future generations. The current timetable is unchanged."
+        confirmLabel="Delete"
+        onConfirm={handleDelete}
+        isConfirming={deletion.isSubmitting}
+        error={deletion.error}
+      />
     </Page>
   );
 }

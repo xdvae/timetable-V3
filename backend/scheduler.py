@@ -56,6 +56,10 @@ from backend.schedule_rules import (
     overlap_count,
     valid_starts as rule_valid_starts,
 )
+from backend.faculty_preferences import (
+    normalize_faculty_preferences,
+    faculty_time_penalty,
+)
 
 
 def expand_sessions(assignments):
@@ -178,6 +182,21 @@ def preferred_time_scale(num_sessions):
     `num_sessions`, since each session contributes at most penalty 1).
     """
     return (num_sessions or 0) + 1
+
+
+def faculty_time_scale(num_sessions):
+    """Start-period multiplier when faculty preferences are also active.
+
+    Invariant: one start-period unit (worth `2 * num_sessions + 1`)
+    always outweighs every possible secondary improvement combined (at
+    most `2 * num_sessions`: each session contributes at most
+    preferred-room penalty 1 plus faculty-preference penalty 1). So
+    time-compactness still dominates exactly as before, while the two
+    secondary categories arbitrate among time-equal alternatives on an
+    equal footing — neither can systematically dominate the other
+    (each is bounded by `num_sessions` total).
+    """
+    return 2 * (num_sessions or 0) + 1
 
 
 def _residual_assignments(assignments, locked_periods):
@@ -337,7 +356,7 @@ def _locked_occupancy(locked_placements):
 def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
                    break_after, max_consecutive, time_limit_seconds=30,
                    locked_placements=None, specialization_data=None,
-                   preferred_theory_rooms=None):
+                   preferred_theory_rooms=None, faculty_preferences=None):
     """
     faculty_unavailable: dict faculty_id -> set of "day:period" strings
     locked_placements: optional list of fixed dicts, each with
@@ -361,6 +380,20 @@ def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
         are unchanged, so feasibility is identical with or without the
         map. When None/empty the encoding (and optimum) is identical to
         the no-preference solver.
+    faculty_preferences: optional iterable of duck-typed preference rows
+        (Phase 6J: FacultyPreference ORM rows, dicts, or namespaces with
+        faculty_id/kind/days/start_period/end_period/enabled). Only
+        TIME_WINDOW and DAY_OFF_PREFERENCE rows survive normalization;
+        each session placement violating its faculty's surviving prefs
+        costs one soft penalty unit (binary per session, capped). Never
+        a constraint: domains and hard rules are unchanged, so
+        feasibility is identical with or without prefs. Specialization
+        sessions score through their own faculty like any other session:
+        cohort synchronization is enforced by hard equality constraints,
+        so the penalty can only rank synchronized alternatives, never
+        desynchronize them. Locked placements are constants (never
+        variables) and are unaffected. When None/empty the model is
+        identical to the Phase 6I solver (same scale, same optimum).
     Returns: (status_str, list_of_placements) where each placement is
              {assignment_id, seq, day, start_period, length, room_id}
              or (status_str, []) / (status_str, None) with a message on failure.
@@ -977,25 +1010,37 @@ def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
                             f"({sec_key} on {d}, periods {list(window)}).")
 
     # ---- Soft objective: minimize start periods (compact + early-finish),
-    # with a strictly subordinate preferred-theory-room tie-break (6I) ----
-    # time_scale = #sessions + 1 (see preferred_time_scale): one
-    # start-period unit always outweighs every possible preferred-room
-    # improvement combined, so time-compactness dominates exactly as
-    # before and the preference only arbitrates among time-equal
-    # alternatives. Penalty is 0/1 per placement (whole-section theory
-    # with a mapped preference only; 0 elsewhere). Domains and hard
-    # constraints are untouched: feasibility is identical with or without
-    # the map, and locked placements (constants, never variables) plus
-    # specialization sessions (never eligible) are unaffected.
+    # with strictly subordinate preferred-theory-room (6I) and faculty
+    # preference (6J) tie-breaks ----
+    # Without faculty prefs the scale is #sessions + 1 (see
+    # preferred_time_scale): one start-period unit always outweighs every
+    # possible preferred-room improvement combined, so time-compactness
+    # dominates exactly as before and the room preference only arbitrates
+    # among time-equal alternatives. With faculty prefs the scale is
+    # 2 * #sessions + 1 (see faculty_time_scale): one start-period unit
+    # outweighs room + faculty improvements combined, and the two
+    # secondary categories share equal footing (each bounded by
+    # #sessions total). Penalties are 0/1 per placement (whole-section
+    # theory with a mapped preference only, 0 elsewhere; faculty penalty
+    # via faculty_time_penalty). Domains and hard constraints are
+    # untouched: feasibility is identical with or without either map,
+    # and locked placements (constants, never variables) are unaffected.
     preferred_map = normalize_preferred_rooms(preferred_theory_rooms, rooms)
-    time_scale = preferred_time_scale(len(sessions))
+    faculty_map = normalize_faculty_preferences(
+        faculty_preferences, days, num_periods)
+    if faculty_map:
+        time_scale = faculty_time_scale(len(sessions))
+    else:
+        time_scale = preferred_time_scale(len(sessions))
     objective_terms = []
     for s_idx, sess in enumerate(sessions):
         for (d, start, r) in session_options[s_idx]:
             # squared-ish weighting via linear scale keeps it simple & fast for CP-SAT
             objective_terms.append(
                 (start * time_scale
-                 + preferred_room_penalty(sess, r, preferred_map))
+                 + preferred_room_penalty(sess, r, preferred_map)
+                 + faculty_time_penalty(sess.get("faculty_id"), d, start,
+                                        sess["length"], faculty_map))
                 * x[(s_idx, d, start, r)])
     model.Minimize(sum(objective_terms))
 

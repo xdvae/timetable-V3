@@ -38,6 +38,12 @@ export const FAILURE_LABELS = {
   UNKNOWN_DAY: "Unknown day",
   PERIOD_OUT_OF_RANGE: "Period out of range",
   BREAK_SPAN: "Block spans the break",
+  UNKNOWN_PREFERENCE: "Preference not found",
+  PREF_INVALID_KIND: "Unsupported preference kind",
+  PREF_INVALID_DAYS: "Invalid preference days",
+  PREF_INVALID_PERIOD: "Invalid preference period range",
+  PREF_INVALID_WEIGHT: "Invalid preference weight",
+  PREF_HARD_UNSUPPORTED: "Preferences are soft-only",
 };
 
 /** Secondary context line built only from fields the backend provided. */

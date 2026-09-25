@@ -685,6 +685,124 @@ def api_faculty_availability_save(fid):
                     "unavailable": sorted(f.unavailable_set())})
 
 
+# -------------------------------------- faculty preferences (6J)
+# Thin soft-preference administration: every rule lives in
+# backend/faculty_preferences.py. Routes only parse the faculty scope,
+# call the domain service, and map PreferenceError onto the ApiError
+# envelope (code/details/failures preserved verbatim). Preference
+# changes mutate only faculty_preference rows — never the timetable, so
+# the current schedule is unchanged and only future generations observe
+# them (every success message says so explicitly).
+def _preference_api_error(exc):
+    """Map PreferenceError onto the structured ApiError envelope."""
+    payload = exc.to_payload()
+    # 404 is reserved for missing faculty/preference; every failed
+    # preference validation is a 422.
+    status = 404 if payload["code"] in ("UNKNOWN_FACULTY",
+                                        "UNKNOWN_PREFERENCE") else 422
+    primary = exc.failures[0] if exc.failures else None
+    field_errors = None
+    if primary and primary["code"] in ("PREF_INVALID_KIND",
+                                       "PREF_INVALID_DAYS",
+                                       "PREF_INVALID_PERIOD",
+                                       "PREF_INVALID_WEIGHT",
+                                       "PREF_HARD_UNSUPPORTED"):
+        field_errors = {"preference": primary["message"]}
+    raise ApiError(payload["error"], status, field_errors,
+                   code=payload["code"], details=payload["details"],
+                   failures=payload["failures"])
+
+
+@api_bp.route("/faculty/<int:fid>/preferences", methods=["GET"])
+@login_required
+def api_faculty_preferences_list(fid):
+    """READ: one faculty's soft scheduling preferences plus config context.
+
+    Returns the faculty identity, working days/periods (so the UI can
+    render day/period pickers without a second round-trip), and the
+    authoritative preference list. Pre-6C databases without the table
+    read as an empty list.
+    """
+    from backend import faculty_preferences as fp_svc
+    try:
+        rows = fp_svc.list_for_faculty(db, fid)
+    except fp_svc.PreferenceError as exc:
+        _preference_api_error(exc)
+    try:
+        prefs = [fp_svc.preference_json(r) for r in rows]
+    except Exception:
+        # Pre-6C database: no faculty_preference table yet.
+        prefs = []
+    f = Faculty.query.get(fid)
+    cfg = _get_config()
+    return jsonify({"faculty": {"id": f.id, "name": f.name},
+                    "days": cfg.day_list(),
+                    "periods": cfg.period_list(),
+                    "num_periods": len(cfg.period_list()),
+                    "preferences": prefs})
+
+
+@api_bp.route("/faculty/<int:fid>/preferences", methods=["POST"])
+@login_required
+def api_faculty_preference_create(fid):
+    """CREATE: {kind, days?, start_period?, end_period?, weight?,
+    enabled?}.
+
+    Only TIME_WINDOW and DAY_OFF_PREFERENCE may be configured;
+    SUBJECT_AFFINITY is recognized but rejected as unsupported, hard
+    preferences are rejected (soft-only). Never touches the timetable.
+    """
+    from backend import faculty_preferences as fp_svc
+    data = _data()
+    try:
+        row = fp_svc.create_preference(db, fid, data)
+    except fp_svc.PreferenceError as exc:
+        _preference_api_error(exc)
+    return jsonify({"ok": True,
+                    "message": f"Preference saved for faculty "
+                               f"'{row.faculty.name if row.faculty else fid}'. "
+                               f"Future timetable generations will consider "
+                               f"it; the current timetable is unchanged.",
+                    "preference": fp_svc.preference_json(row)}), 201
+
+
+@api_bp.route("/faculty/preferences/<int:pid>", methods=["POST"])
+@login_required
+def api_faculty_preference_update(pid):
+    """UPDATE: partial fields merged over the stored row, re-validated.
+
+    Accepts any subset of {kind, days, start_period, end_period,
+    weight, enabled} (explicit null clears a period bound, allowing a
+    kind change). Never touches the timetable.
+    """
+    from backend import faculty_preferences as fp_svc
+    data = _data()
+    try:
+        row = fp_svc.update_preference(db, pid, data)
+    except fp_svc.PreferenceError as exc:
+        _preference_api_error(exc)
+    return jsonify({"ok": True,
+                    "message": "Preference updated. Future timetable "
+                               "generations will consider it; the current "
+                               "timetable is unchanged.",
+                    "preference": fp_svc.preference_json(row)})
+
+
+@api_bp.route("/faculty/preferences/<int:pid>/delete", methods=["POST"])
+@login_required
+def api_faculty_preference_delete(pid):
+    """DELETE: remove one preference row. Never touches the timetable."""
+    from backend import faculty_preferences as fp_svc
+    try:
+        fp_svc.delete_preference(db, pid)
+    except fp_svc.PreferenceError as exc:
+        _preference_api_error(exc)
+    return jsonify({"ok": True, "message": "Preference deleted. Future "
+                                           "timetable generations will no "
+                                           "longer consider it; the current "
+                                           "timetable is unchanged."})
+
+
 @api_bp.route("/programs", methods=["POST"])
 @login_required
 def api_program_create():
@@ -1207,6 +1325,16 @@ def api_schedule_run():
     except Exception:
         preferred_theory_rooms = {}
 
+    # Phase 6J: faculty custom preferences enter the solver the same way
+    # (soft objective only, never a constraint). Malformed/legacy rows
+    # are dropped by the scheduler normalizer; a missing table on legacy
+    # databases means no preferences at all.
+    try:
+        from backend import faculty_preferences as fp_svc
+        faculty_pref_rows = fp_svc.query_scheduler_rows(db)
+    except Exception:
+        faculty_pref_rows = []
+
     status, placements, message = run_scheduler(
         assignments, rooms, faculty_unavail, days, len(periods),
         cfg.break_after_periods if cfg.break_after_periods else None,
@@ -1215,6 +1343,7 @@ def api_schedule_run():
         locked_placements=locked_placements,
         specialization_data=specialization_data,
         preferred_theory_rooms=preferred_theory_rooms,
+        faculty_preferences=faculty_pref_rows,
     )
 
     if status in ("INFEASIBLE", "NO_SESSIONS"):
