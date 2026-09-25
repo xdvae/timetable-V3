@@ -1119,6 +1119,141 @@ def api_locked_block_delete(bid):
     return jsonify({"ok": True, "message": "Locked block deleted."})
 
 
+# ------------------------------------------------ manual editing (6G)
+def _scheduled_class_json(sc):
+    """Serialize one ScheduledClass with assignment context for the move API.
+
+    ScheduledClass stays the source of truth; section/faculty/room views
+    derive from it, so a successful move propagates immediately.
+    """
+    a = sc.assignment
+    subj = a.subject.name if a and a.subject else "?"
+    fac = a.faculty.name if a and a.faculty else "?"
+    room = sc.room.name if sc.room else "?"
+    section = lab_group = specialization = None
+    section_id = lab_group_id = specialization_id = None
+    if a is not None:
+        if getattr(a, "specialization_id", None) is not None:
+            specialization_id = a.specialization_id
+            specialization = a.specialization.name \
+                if getattr(a, "specialization", None) else \
+                f"specialization:{specialization_id}"
+        elif a.session_type == "practical" and a.lab_group is not None:
+            lab_group_id = a.lab_group_id
+            lab_group = a.lab_group.name
+        elif a.section is not None:
+            section_id = a.section_id
+            section = a.section.name
+    return {"id": sc.id, "assignment_id": sc.assignment_id,
+            "day": sc.day, "start_period": sc.start_period,
+            "length": sc.length, "room_id": sc.room_id, "room": room,
+            "subject": subj, "subject_id": a.subject_id if a else None,
+            "faculty": fac, "faculty_id": a.faculty_id if a else None,
+            "session_type": a.session_type if a else None,
+            "section_id": section_id, "section": section,
+            "lab_group_id": lab_group_id, "lab_group": lab_group,
+            "specialization_id": specialization_id,
+            "specialization": specialization,
+            "run_id": sc.run_id, "is_locked": bool(sc.is_locked),
+            "slot_id": sc.slot_id, "locked_block_id": sc.locked_block_id}
+
+
+def _manual_edit_api_error(exc):
+    """Map ManualEditError onto the structured ApiError envelope."""
+    payload = exc.to_payload()
+    # 404 is reserved for a missing scheduled class; every failed
+    # placement validation (unknown room included) is a 422.
+    status = 404 if (payload["code"] == "MANUAL_EDIT_INVALID"
+                     and "Scheduled class" in payload["error"]
+                     and "does not exist" in payload["error"]) else 422
+    primary = exc.failures[0] if exc.failures else None
+    field_errors = None
+    if primary and primary.code in ("UNKNOWN_DAY", "PERIOD_OUT_OF_RANGE",
+                                    "BLOCK_GEOMETRY", "BREAK_SPAN",
+                                    "UNKNOWN_ROOM"):
+        field_errors = {"placement": primary.message}
+    raise ApiError(payload["error"], status, field_errors,
+                   code=payload["code"], details=payload["details"],
+                   failures=payload["failures"])
+
+
+def _move_failures_api_error(failures):
+    """Structured ApiError for a dry-run validation failure list."""
+    primary = failures[0]
+    field_errors = None
+    if primary.code in ("UNKNOWN_DAY", "PERIOD_OUT_OF_RANGE",
+                        "BLOCK_GEOMETRY", "BREAK_SPAN", "UNKNOWN_ROOM"):
+        field_errors = {"placement": primary.message}
+    raise ApiError(primary.message, 422, field_errors,
+                   code=primary.code, details=primary.details,
+                   failures=[{"code": f.code, "message": f.message,
+                              "details": f.details} for f in failures])
+
+
+@api_bp.route("/schedule/classes/<int:cid>/validate-move", methods=["POST"])
+@login_required
+def api_validate_move(cid):
+    """DRY-RUN: check whether a manual move would be valid (no mutation).
+
+    Payload: {day, start_period, room_id} — only these three fields are
+    read; anything else in the body is ignored. Lets the future drag/drop
+    editor ask "can this class be moved here?" using exactly the same
+    validation as the move itself.
+    """
+    from backend import manual_edits as me_svc
+    data = _data()
+    day = _require_str(data, "day")
+    start_period = _required_int(data, "start_period")
+    room_id = _required_int(data, "room_id")
+    try:
+        result = me_svc.validate_move_candidate(
+            db, cid, day=day, start_period=start_period, room_id=room_id)
+    except me_svc.ManualEditError as exc:
+        _manual_edit_api_error(exc)
+    if not result.ok:
+        _move_failures_api_error(result.failures)
+    if result.noop:
+        return jsonify({"ok": True, "noop": True,
+                        "message": "Class is already at the requested "
+                                   "placement; nothing to change.",
+                        "candidate": result.candidate,
+                        "current": result.current})
+    return jsonify({"ok": True, "noop": False,
+                    "message": "Move is valid.",
+                    "candidate": result.candidate,
+                    "current": result.current})
+
+
+@api_bp.route("/schedule/classes/<int:cid>/move", methods=["POST"])
+@login_required
+def api_move_class(cid):
+    """MOVE: atomically relocate one scheduled class (day/start/room).
+
+    Only day, start_period, and room_id are accepted; assignment, length,
+    run_id, lock, and slot linkage are preserved and cannot be changed
+    through this endpoint. On failure nothing is modified (atomic).
+    """
+    from backend import manual_edits as me_svc
+    data = _data()
+    day = _require_str(data, "day")
+    start_period = _required_int(data, "start_period")
+    room_id = _required_int(data, "room_id")
+    try:
+        sc, result = me_svc.move_scheduled_class(
+            db, cid, day=day, start_period=start_period, room_id=room_id)
+    except me_svc.ManualEditError as exc:
+        _manual_edit_api_error(exc)
+    if result.noop:
+        return jsonify({"ok": True, "noop": True,
+                        "message": "Class is already at the requested "
+                                   "placement; nothing changed.",
+                        "scheduled_class": _scheduled_class_json(sc)})
+    return jsonify({"ok": True, "noop": False,
+                    "message": f"Scheduled class {sc.id} moved to {sc.day} "
+                               f"period {sc.start_period} (room {sc.room_id}).",
+                    "scheduled_class": _scheduled_class_json(sc)})
+
+
 # ------------------------------------------------- specializations (6F)
 def _spec_payload(spec_id):
     """Full schedule payload for one specialization (future frontend)."""
