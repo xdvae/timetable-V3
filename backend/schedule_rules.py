@@ -431,3 +431,165 @@ def section_theory_demand(assignments) -> Dict:
             continue
         demand[sid] = demand.get(sid, 0) + (getattr(a, "periods_per_week", 0) or 0)
     return demand
+
+
+# ----------------- Specializations (Phase 6F)
+# Conservative originating-section occupancy: a specialization slot blocks
+# every participating section for normal teaching during that slot (no
+# student-level scheduling in 6F). All helpers are pure and return
+# RuleResult; the scheduler/validator/audit share them.
+def check_specialization_enrollment(spec_enrollment_id, section_enrollment_id,
+                                    specialization_id=None, section_id=None,
+                                    specialization_name: str = "?",
+                                    section_name: str = "?") -> RuleResult:
+    """SPECIALIZATION_ENROLLMENT: a specialization's section must belong to
+    the same enrollment/cohort. Merging unrelated programs/cohorts is
+    rejected."""
+    if spec_enrollment_id != section_enrollment_id:
+        return _fail(
+            "SPECIALIZATION_ENROLLMENT",
+            f"Section '{section_name}' (enrollment {section_enrollment_id}) "
+            f"cannot join specialization '{specialization_name}' "
+            f"(enrollment {spec_enrollment_id}): cross-cohort membership "
+            f"is not allowed.",
+            {"specialization_id": specialization_id,
+             "specialization": specialization_name,
+             "specialization_enrollment_id": spec_enrollment_id,
+             "section_id": section_id, "section": section_name,
+             "section_enrollment_id": section_enrollment_id},
+        )
+    return _pass()
+
+
+def check_specialization_membership_count(student_count: int,
+                                          specialization_id=None,
+                                          section_id=None) -> RuleResult:
+    """SPECIALIZATION_MEMBERSHIP: student_count must be a positive integer."""
+    if not isinstance(student_count, int) or student_count <= 0:
+        return _fail(
+            "SPECIALIZATION_MEMBERSHIP",
+            f"Invalid specialization membership count ({student_count!r}): "
+            f"must be a positive whole number of students.",
+            {"specialization_id": specialization_id,
+             "section_id": section_id, "student_count": student_count},
+        )
+    return _pass()
+
+
+def check_specialization_capacity(student_count: int, section_capacity: int,
+                                  existing_allocation: int = 0,
+                                  specialization_id=None, section_id=None,
+                                  section_name: str = "?",
+                                  specialization_name: str = "?") -> RuleResult:
+    """SPECIALIZATION_CAPACITY: per-section aggregate allocation check.
+
+    `existing_allocation` is the sum already allocated to this section
+    across its other specializations (excluding the membership under
+    validation when updating). Total must stay within section enrollment.
+    """
+    if section_capacity is not None and student_count is not None:
+        if student_count > section_capacity:
+            return _fail(
+                "SPECIALIZATION_CAPACITY",
+                f"Specialization '{specialization_name}' requests "
+                f"{student_count} students from section '{section_name}' "
+                f"({section_capacity} enrolled): exceeds section enrollment.",
+                {"specialization_id": specialization_id,
+                 "specialization": specialization_name,
+                 "section_id": section_id, "section": section_name,
+                 "section_capacity": section_capacity,
+                 "requested": student_count,
+                 "existing_allocation": existing_allocation,
+                 "remaining_capacity": max(0, (section_capacity or 0)
+                                           - (existing_allocation or 0))},
+            )
+        total = (existing_allocation or 0) + (student_count or 0)
+        if total > (section_capacity or 0):
+            return _fail(
+                "SPECIALIZATION_CAPACITY",
+                f"Section '{section_name}' ({section_capacity} students) "
+                f"cannot allocate {student_count} more to "
+                f"'{specialization_name}': already allocated "
+                f"{existing_allocation}, {max(0, (section_capacity or 0) - (existing_allocation or 0))} "
+                f"remaining.",
+                {"specialization_id": specialization_id,
+                 "specialization": specialization_name,
+                 "section_id": section_id, "section": section_name,
+                 "section_capacity": section_capacity,
+                 "requested": student_count,
+                 "existing_allocation": existing_allocation,
+                 "remaining_capacity": max(0, (section_capacity or 0)
+                                           - (existing_allocation or 0)),
+                 "total_requested": total},
+            )
+    return _pass()
+
+
+def check_specialization_room_capacity(total_students: int,
+                                       room_capacity: Optional[int],
+                                       room_name: str = "?",
+                                       specialization_name: str = "?",
+                                       specialization_id=None) -> RuleResult:
+    """SPECIALIZATION_CAPACITY (room side): the room must hold the whole
+    specialization headcount (sum across originating sections)."""
+    if room_capacity is not None and total_students is not None \
+            and room_capacity < total_students:
+        return _fail(
+            "SPECIALIZATION_CAPACITY",
+            f"Room {room_name} (capacity {room_capacity}) cannot hold "
+            f"specialization '{specialization_name}' "
+            f"({total_students} students).",
+            {"specialization_id": specialization_id,
+             "specialization": specialization_name,
+             "room_name": room_name, "room_capacity": room_capacity,
+             "required_capacity": total_students},
+        )
+    return _pass()
+
+
+def check_specialization_sync(expected_slots, actual_slots,
+                               specialization_id=None,
+                               specialization_name: str = "?",
+                               enrollment_id=None) -> RuleResult:
+    """SPECIALIZATION_SYNC: slots of one specialization must equal the
+    cohort's synchronized pattern.
+
+    Slots are compared as sorted (day, start_period, length) lists. Any
+    difference in count, day, start, or length is a sync violation.
+    Rooms/faculty are deliberately NOT compared (they may differ).
+    """
+    exp = sorted(list(expected_slots or []))
+    got = sorted(list(actual_slots or []))
+    if exp != got:
+        return _fail(
+            "SPECIALIZATION_SYNC",
+            f"Specialization '{specialization_name}' is out of sync: "
+            f"expected slots {exp}, got {got}. All specializations in "
+            f"enrollment {enrollment_id} must share identical "
+            f"(day, start, length).",
+            {"specialization_id": specialization_id,
+             "specialization": specialization_name,
+             "enrollment_id": enrollment_id,
+             "expected_slots": [list(s) for s in exp],
+             "actual_slots": [list(s) for s in got]},
+        )
+    return _pass()
+
+
+def check_specialization_overlap(section_name: str = "?",
+                                 specialization_name: str = "?",
+                                 day: str = "?", period=None,
+                                 specialization_id=None,
+                                 section_id=None) -> RuleResult:
+    """SPECIALIZATION_OVERLAP: a specialization slot collides with normal
+    teaching attended by a participating section."""
+    return _fail(
+        "SPECIALIZATION_OVERLAP",
+        f"Specialization '{specialization_name}' on {day} at period "
+        f"{period} overlaps normal teaching for participating section "
+        f"'{section_name}'.",
+        {"specialization_id": specialization_id,
+         "specialization": specialization_name,
+         "section_id": section_id, "section": section_name,
+         "day": day, "period": period},
+    )

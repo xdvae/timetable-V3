@@ -126,13 +126,28 @@ class TeachingAssignment(db.Model):
     lab_group_id = db.Column(db.Integer, db.ForeignKey("lab_group.id"), nullable=True)  # used for practical
     periods_per_week = db.Column(db.Integer, nullable=False)   # total contact periods/week
     block_length = db.Column(db.Integer, nullable=False)       # periods per single session block (e.g. 1 for theory, 2 for a lab block)
+    # Phase 6F (additive, nullable): when set, this assignment teaches one
+    # specialization (cross-section group) instead of a section/lab-group.
+    # section_id/lab_group_id stay NULL; group size = sum of membership
+    # headcounts; the scheduler blocks every participating section.
+    # Pre-6F rows keep NULL (normal teaching, unchanged behavior).
+    specialization_id = db.Column(db.Integer, db.ForeignKey("specialization.id"), nullable=True)
 
     faculty = db.relationship("Faculty")
     subject = db.relationship("Subject")
     section = db.relationship("Section")
     lab_group = db.relationship("LabGroup")
+    specialization = db.relationship("Specialization")
 
     def group_size(self):
+        if self.specialization_id is not None:
+            # Specialization headcount is membership-driven; ORM rows here
+            # cannot sum it without a query, so callers (scheduler/validator)
+            # override with the membership total. Fall back to section size
+            # only when no specialization link exists.
+            if self.section:
+                return self.section.student_count
+            return 0
         if self.session_type == "practical" and self.lab_group:
             return self.lab_group.student_count
         if self.section:
@@ -140,14 +155,20 @@ class TeachingAssignment(db.Model):
         return 0
 
     def group_label(self):
+        if self.specialization_id is not None and self.specialization is not None:
+            return f"SPEC:{self.specialization.name}"
         if self.session_type == "practical" and self.lab_group:
             return self.lab_group.name
         if self.section:
             return self.section.name
+        if self.specialization_id is not None:
+            return f"specialization:{self.specialization_id}"
         return "?"
 
     def group_key(self):
         """A unique key identifying the student group (section or lab group) for overlap checks."""
+        if self.specialization_id is not None:
+            return f"specialization:{self.specialization_id}"
         if self.session_type == "practical" and self.lab_group:
             return f"labgroup:{self.lab_group_id}"
         return f"section:{self.section_id}"
@@ -206,6 +227,12 @@ class Specialization(db.Model):
     slots = db.relationship("SpecializationSlot",
                             back_populates="specialization",
                             cascade="all, delete-orphan")
+    # Phase 6F: teaching assignments for this specialization (each carries
+    # faculty/subject/periods; section/lab stay NULL). View-only here;
+    # lifecycle (delete with spec) is handled in specializations.py.
+    assignments = db.relationship("TeachingAssignment",
+                                  primaryjoin="Specialization.id==TeachingAssignment.specialization_id",
+                                  viewonly=True)
 
 
 class SpecializationMembership(db.Model):

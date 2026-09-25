@@ -167,6 +167,11 @@ reset the theory streak, and the streak does not cross configured breaks) — wh
 schedules come out compact with no dead gaps. Its rules are intentionally kept separate from
 the React frontend, which only renders the resulting lane/block structures.
 
+Backend phases: 6C (additive schema), 6D (HN1), 6D.2 (read-only audit),
+6E (locked interdepartment blocks), 6F (specializations — synchronized
+cohorts with conservative originating-section occupancy, no student-level
+scheduling; see `backend/PHASE_6F_SPECIALIZATIONS.md`).
+
 ## Timetable Views
 
 The backend supports three timetable views — `section`, `faculty`, `room` — plus a Who's Free

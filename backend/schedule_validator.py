@@ -42,7 +42,7 @@ class ScheduleSnapshot:
     # lab_group_id -> parent section_id (H8 hierarchy)
     labgroup_section: Dict[int, int] = field(default_factory=dict)
     # assignment_id -> {group_key, parent_section_key, session_type,
-    #                   group_size, group_label, faculty_id}
+    #                   group_size, group_label, faculty_id, spec_id?}
     assignments: Dict[int, dict] = field(default_factory=dict)
     # scheduled_class_id -> {assignment_id, day, start_period, length, room_id}
     classes: Dict[int, dict] = field(default_factory=dict)
@@ -60,6 +60,16 @@ class ScheduleSnapshot:
     # whole-section THEORY placements are recorded here; practicals never
     # count toward the consecutive-theory streak.
     theory_occ: Dict = field(default_factory=dict)
+    # Phase 6F: specialization footprint (conservative section occupancy).
+    # spec_info: spec_id -> {enrollment_id, section_ids, total_students,
+    #   session_type, name}. assignment_spec: assignment_id -> spec_id.
+    # spec_section_occ[(section_id, day, period)] counts synchronized cohort
+    # occupancy ONCE per (enrollment, day, start, length) group (never
+    # triple-counted). spec_theory_occ is the theory-only subset for HN1.
+    spec_info: Dict[int, dict] = field(default_factory=dict)
+    assignment_spec: Dict[int, int] = field(default_factory=dict)
+    spec_section_occ: Dict = field(default_factory=dict)
+    spec_theory_occ: Dict = field(default_factory=dict)
 
 
 def _group_info(session_type: str, section_id, section_name: str, section_size: int,
@@ -78,17 +88,63 @@ def _group_info(session_type: str, section_id, section_name: str, section_size: 
             "group_size": section_size or 0}
 
 
+def _spec_group_key(spec_id) -> str:
+    return f"specialization:{spec_id}"
+
+
+def _rebuild_spec_occupancy(snap: ScheduleSnapshot) -> None:
+    """Recompute deduped specialization occupancy from snap.classes.
+
+    Groups spec classes by (enrollment, day, start, length); each group
+    contributes ONCE per participating section (never triple-counted).
+    Theory groups contribute to spec_theory_occ only for sections whose
+    spec session at that time is theory (per-assignment session_type).
+    """
+    snap.spec_section_occ = {}
+    snap.spec_theory_occ = {}
+    # class_id -> spec context for grouping.
+    groups = {}  # (enrollment, day, start, length) -> {class_ids, section_set, theory_sections}
+    for cid, cls in snap.classes.items():
+        info = snap.assignments.get(cls["assignment_id"])
+        if info is None or info.get("spec_id") is None:
+            continue
+        spec_id = info["spec_id"]
+        sinfo = snap.spec_info.get(spec_id, {})
+        enr = sinfo.get("enrollment_id")
+        key = (enr, cls["day"], cls["start_period"], cls["length"])
+        g = groups.setdefault(key, {"sections": set(),
+                                    "theory_sections": set()})
+        for sec_id in sinfo.get("section_ids", []) or []:
+            g["sections"].add(sec_id)
+            if (info.get("session_type") == "theory"):
+                g["theory_sections"].add(sec_id)
+    for (enr, day, start, length), g in groups.items():
+        for p in rules.covers(start, length):
+            for sec_id in g["sections"]:
+                k = (sec_id, day, p)
+                snap.spec_section_occ[k] = snap.spec_section_occ.get(k, 0) + 1
+            for sec_id in g["theory_sections"]:
+                k = (sec_id, day, p)
+                snap.spec_theory_occ[k] = snap.spec_theory_occ.get(k, 0) + 1
+
+
 def build_snapshot(days: List[str], num_periods: int, break_after: Optional[int],
                    max_consecutive: Optional[int], rooms, faculty, lab_groups,
-                   sections, assignments, scheduled_classes) -> ScheduleSnapshot:
+                   sections, assignments, scheduled_classes,
+                   specializations=None, memberships=None) -> ScheduleSnapshot:
     """Assemble a snapshot from loaded rows (ORM objects or SimpleNamespace).
 
     Expected attributes — rooms: id/name/room_type/capacity/equipment_count;
     faculty: id/unavailable_set() or unavailable_slots string; lab_groups:
     id/section_id; sections: id/name/student_count; assignments: id/
     faculty_id/session_type/section_id/lab_group_id/periods_per_week/
-    block_length plus resolved section/lab-group name+size+parent ids;
+    block_length plus resolved section/lab-group name+size+parent ids
+    (Phase 6F: assignments may carry specialization_id for spec teaching);
     scheduled_classes: id/assignment_id/day/start_period/length/room_id.
+    Phase 6F: optional specializations (id/enrollment_id/session_type/name)
+    + memberships (specialization_id/section_id/student_count) build the
+    conservative section-occupancy footprint (deduped per synchronized
+    group). Existing callers omitting them get identical behavior.
     """
     snap = ScheduleSnapshot(days=list(days), num_periods=num_periods,
                             break_after=break_after, max_consecutive=max_consecutive)
@@ -106,7 +162,38 @@ def build_snapshot(days: List[str], num_periods: int, break_after: Optional[int]
     sec_by_id = {s.id: s for s in sections}
     for lg in lab_groups:
         snap.labgroup_section[lg.id] = lg.section_id
+    # Phase 6F: spec membership totals + section sets.
+    mem_by_spec: Dict[int, list] = {}
+    for m in memberships or []:
+        mem_by_spec.setdefault(getattr(m, "specialization_id", None), []).append(m)
+    spec_by_id = {s.id: s for s in (specializations or [])}
+    for sid, spec in spec_by_id.items():
+        mems = mem_by_spec.get(sid, [])
+        snap.spec_info[sid] = {
+            "enrollment_id": getattr(spec, "enrollment_id", None),
+            "section_ids": sorted(m.section_id for m in mems),
+            "total_students": sum(m.student_count for m in mems),
+            "session_type": getattr(spec, "session_type", "theory"),
+            "name": getattr(spec, "name", str(sid)),
+        }
     for a in assignments:
+        spec_id = getattr(a, "specialization_id", None)
+        if spec_id is not None:
+            sinfo = snap.spec_info.get(spec_id, {})
+            total = sinfo.get("total_students", 0) or 0
+            sname = sinfo.get("name", str(spec_id))
+            info = {"group_key": _spec_group_key(spec_id),
+                    "parent_section_key": None,
+                    "group_label": f"SPEC:{sname}",
+                    "group_size": total,
+                    "session_type": getattr(a, "session_type", "theory"),
+                    "faculty_id": getattr(a, "faculty_id", None),
+                    "spec_id": spec_id,
+                    "section_ids": list(sinfo.get("section_ids", []) or []),
+                    "total_students": total}
+            snap.assignments[a.id] = info
+            snap.assignment_spec[a.id] = spec_id
+            continue
         sec = sec_by_id.get(getattr(a, "section_id", None))
         if getattr(a, "session_type", "") == "practical" and getattr(a, "lab_group_id", None):
             info = _group_info("practical", None, "", 0, a.lab_group_id,
@@ -141,8 +228,9 @@ def build_snapshot(days: List[str], num_periods: int, break_after: Optional[int]
                             sc.start_period, sc.length)
         rules.add_placement(snap.group_occ, info["group_key"], sc.day,
                             sc.start_period, sc.length)
-        if info.get("session_type") == "theory":
+        if info.get("session_type") == "theory" and info.get("spec_id") is None:
             # HN1 footprint: theory occupancy per section/day/period.
+            # (Spec theory lives in spec_theory_occ, deduped per sync group.)
             rules.add_placement(snap.theory_occ, info["group_key"], sc.day,
                                 sc.start_period, sc.length)
         parent = info.get("parent_section_key")
@@ -151,6 +239,7 @@ def build_snapshot(days: List[str], num_periods: int, break_after: Optional[int]
             # section's availability for hierarchy checks.
             rules.add_placement(snap.group_occ, f"__parent__:{parent}", sc.day,
                                 sc.start_period, sc.length)
+    _rebuild_spec_occupancy(snap)
     return snap
 
 
@@ -165,14 +254,18 @@ def snapshot_without(snap: ScheduleSnapshot, class_id: int) -> ScheduleSnapshot:
     info = clone.assignments.get(current["assignment_id"])
     day, start, length = current["day"], current["start_period"], current["length"]
     for p in rules.covers(start, length):
-        for occ, key in ((clone.room_occ, (current["room_id"], day, p)),
-                         (clone.faculty_occ,
-                          (info["faculty_id"], day, p) if info else None),
-                         (clone.group_occ,
-                          (info["group_key"], day, p) if info else None),
-                         (clone.theory_occ,
-                          (info["group_key"], day, p)
-                          if info and info.get("session_type") == "theory" else None)):
+        occ_keys = [(clone.room_occ, (current["room_id"], day, p)),
+                    (clone.faculty_occ,
+                     (info["faculty_id"], day, p) if info else None),
+                    (clone.group_occ,
+                     (info["group_key"], day, p) if info else None)]
+        # Phase 6F: spec theory never lives in theory_occ (deduped in
+        # spec_theory_occ, rebuilt below); normal theory still does.
+        if info and info.get("session_type") == "theory" \
+                and info.get("spec_id") is None:
+            occ_keys.append((clone.theory_occ,
+                             (info["group_key"], day, p)))
+        for occ, key in occ_keys:
             if key is None:
                 continue
             occ[key] = occ.get(key, 1) - 1
@@ -183,6 +276,11 @@ def snapshot_without(snap: ScheduleSnapshot, class_id: int) -> ScheduleSnapshot:
             clone.group_occ[pkey] = clone.group_occ.get(pkey, 1) - 1
             if clone.group_occ[pkey] <= 0:
                 clone.group_occ.pop(pkey, None)
+    # Phase 6F: spec section occupancy is deduped per synchronized group;
+    # removing one class from a 3-spec sync must keep the footprint (the
+    # other two still occupy it). Rebuild from remaining classes.
+    if info and info.get("spec_id") is not None:
+        _rebuild_spec_occupancy(clone)
     return clone
 
 
@@ -349,17 +447,62 @@ def validate_candidate(snap: ScheduleSnapshot, *, session_type: str, group_key: 
                             f"practical on {day} at period {p}.",
                     details={"group": group_key, "day": day, "period": p}))
                 break
+    # Phase 6F: conservative specialization occupancy. A normal candidate
+    # for a participating section must not overlap a synchronized
+    # specialization slot (students cannot attend both).
+    _spec_hit = None
+    if group_key.startswith("section:"):
+        try:
+            _sid = int(group_key.split(":", 1)[1])
+        except (ValueError, IndexError):
+            _sid = None
+        if _sid is not None:
+            for p in rules.covers(start_period, length):
+                if snap.spec_section_occ.get((_sid, day, p), 0) > 0:
+                    _spec_hit = p
+                    break
+            if _spec_hit is not None:
+                failures.append(rules.RuleResult(
+                    ok=False, code="SPECIALIZATION_OVERLAP",
+                    message=f"Section '{group_label}' already attends a "
+                            f"specialization on {day} at period {_spec_hit}.",
+                    details={"section_id": _sid, "section": group_label,
+                             "day": day, "period": _spec_hit,
+                             "room_id": room_id, "faculty_id": faculty_id,
+                             "group": group_key}))
+    elif group_key.startswith("labgroup:"):
+        try:
+            _lg = int(group_key.split(":", 1)[1])
+        except (ValueError, IndexError):
+            _lg = None
+        _parent_sec = snap.labgroup_section.get(_lg) if _lg is not None else None
+        if _parent_sec is not None:
+            for p in rules.covers(start_period, length):
+                if snap.spec_section_occ.get((_parent_sec, day, p), 0) > 0:
+                    failures.append(rules.RuleResult(
+                        ok=False, code="SPECIALIZATION_OVERLAP",
+                        message=f"'{group_label}' overlaps its parent section's "
+                                f"specialization on {day} at period {p}.",
+                        details={"group": group_key,
+                                 "parent_section_id": _parent_sec,
+                                 "day": day, "period": p}))
+                    break
     if session_type == "theory" and group_key.startswith("section:"):
         # HN1: the candidate's covered periods join the section's existing
         # theory occupancy for the day; any fully-covered 3-period
         # in-segment window is a violation. Practical candidates skip this
         # (labs contribute 0 to the theory streak).
+        # Phase 6F: specialization theory counts ONCE per section (union,
+        # never triple-counted).
         try:
             section_id = int(group_key.split(":", 1)[1])
         except (ValueError, IndexError):
             section_id = None
         occupied = {p for (k, d, p) in snap.theory_occ
                     if k == group_key and d == day}
+        if section_id is not None:
+            occupied.update(p for (sid, d, p) in snap.spec_theory_occ
+                            if sid == section_id and d == day)
         occupied.update(rules.covers(start_period, length))
         for res in rules.check_max_two_theory(
                 occupied, snap.num_periods, snap.break_after,
@@ -368,3 +511,125 @@ def validate_candidate(snap: ScheduleSnapshot, *, session_type: str, group_key: 
                                "group": group_key}):
             failures.append(res)
     return failures
+
+
+def validate_specialization_candidate(
+        snap: ScheduleSnapshot, *, specialization_id: int,
+        section_ids, total_students: int, session_type: str,
+        faculty_id: int, day: str, start_period: int, length: int,
+        room_id: int, specialization_name: str = "?",
+        faculty_name: str = "?") -> List[rules.RuleResult]:
+    """Phase 6F: validate one hypothetical specialization placement.
+
+    Checks H2/H3/H4 (room holds the whole specialization headcount),
+    H5/H6 (room/faculty occupancy), H9/H10/H11/H13 (availability/geometry),
+    SPECIALIZATION_OVERLAP (every participating section must be free of
+    normal teaching there), and HN1 (theory counts once per section;
+    practicals contribute 0). Overlapping an existing synchronized spec
+    slot for the same cohort is allowed (that IS synchronization) and is
+    therefore NOT checked against spec_section_occ here.
+    """
+    failures: List[rules.RuleResult] = []
+    room = snap.rooms.get(room_id)
+    if room is None:
+        return [rules.RuleResult(ok=False, code="UNKNOWN_ROOM",
+                                 message=f"Room id {room_id} does not exist.",
+                                 details={"room_id": room_id})]
+    label = f"SPEC:{specialization_name}"
+    for res in (
+        rules.check_day_known(day, snap.days),
+        rules.check_block_geometry(start_period, length, snap.num_periods,
+                                   label),
+        rules.check_break_geometry(start_period, length, snap.break_after,
+                                   label),
+        rules.check_room_compatible(room["room_type"], room["capacity"],
+                                    room["equipment_count"], session_type,
+                                    total_students or 0, room["name"], label),
+        rules.check_faculty_available(
+            snap.faculty_unavailable.get(faculty_id, set()),
+            day, start_period, length, faculty_name),
+    ):
+        if not res.ok:
+            # Map room-capacity failures to the specialization code so
+            # administrators see the cohort context.
+            if res.code == "ROOM_CAPACITY":
+                failures.append(rules.RuleResult(
+                    ok=False, code="SPECIALIZATION_CAPACITY",
+                    message=res.message,
+                    details={**res.details,
+                             "specialization_id": specialization_id,
+                             "specialization": specialization_name}))
+            else:
+                failures.append(res)
+    if failures:
+        return failures
+    for occ, key, code, olabel in (
+            (snap.room_occ, room_id, "ROOM_CONFLICT", "Room"),
+            (snap.faculty_occ, faculty_id, "FACULTY_CONFLICT", "Faculty")):
+        for p in rules.covers(start_period, length):
+            if occ.get((key, day, p), 0) > 0:
+                failures.append(rules.RuleResult(
+                    ok=False, code=code,
+                    message=f"{olabel} {key} is already occupied on {day} "
+                            f"at period {p} (specialization "
+                            f"'{specialization_name}').",
+                    details={"resource": key, "day": day, "period": p,
+                             "room_id": room_id, "faculty_id": faculty_id,
+                             "specialization_id": specialization_id,
+                             "specialization": specialization_name}))
+                break
+    for sec_id in section_ids or []:
+        sec_key = f"section:{sec_id}"
+        for p in rules.covers(start_period, length):
+            if snap.group_occ.get((sec_key, day, p), 0) > 0:
+                failures.append(rules.check_specialization_overlap(
+                    section_name=str(sec_id),
+                    specialization_name=specialization_name,
+                    day=day, period=p,
+                    specialization_id=specialization_id,
+                    section_id=sec_id))
+                break
+            if snap.group_occ.get((f"__parent__:{sec_key}", day, p), 0) > 0:
+                failures.append(rules.RuleResult(
+                    ok=False, code="SPECIALIZATION_OVERLAP",
+                    message=f"Specialization '{specialization_name}' on {day} "
+                            f"at period {p} overlaps a lab-group practical "
+                            f"for participating section {sec_id}.",
+                    details={"specialization_id": specialization_id,
+                             "specialization": specialization_name,
+                             "section_id": sec_id, "day": day,
+                             "period": p}))
+                break
+        if session_type == "theory":
+            occupied = {p for (k, d, p) in snap.theory_occ
+                        if k == sec_key and d == day}
+            occupied.update(p for (sid, d, p) in snap.spec_theory_occ
+                            if sid == sec_id and d == day)
+            occupied.update(rules.covers(start_period, length))
+            try:
+                _sec_label = str(sec_id)
+            except Exception:
+                _sec_label = "?"
+            for res in rules.check_max_two_theory(
+                    occupied, snap.num_periods, snap.break_after,
+                    _sec_label, day, sec_id,
+                    extra_details={"room_id": room_id,
+                                   "faculty_id": faculty_id,
+                                   "specialization_id": specialization_id,
+                                   "specialization": specialization_name}):
+                failures.append(res)
+    return failures
+
+
+def validate_specialization_sync(snap: ScheduleSnapshot,
+                                 slots_by_spec,
+                                 spec_names=None,
+                                 enrollment_id=None) -> List[rules.RuleResult]:
+    """Phase 6F: check one cohort's slots share one synchronized pattern.
+
+    `slots_by_spec`: {spec_id: [(day, start, length), ...]}. Thin wrapper
+    over schedule_rules so the API, audit, and tests share one definition.
+    """
+    from backend.specializations import validate_sync_for_enrollment \
+        as _sync
+    return _sync(slots_by_spec, spec_names, enrollment_id)

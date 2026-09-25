@@ -174,13 +174,41 @@ def load_snapshot(conn):
     except sqlite3.OperationalError:
         faculty_unavailable = {}
 
+    # Phase 6F: specialization link on assignments (absent column ->
+    # legacy-compatible None). Spec group size comes from membership totals
+    # (loaded below), never from section size.
+    try:
+        _ta_cols = _table_cols(conn, "teaching_assignment")
+        _has_spec_col = "specialization_id" in _ta_cols
+    except Exception:
+        _has_spec_col = False
+    # Section -> enrollment for cross-cohort validation (read-only).
+    sec_enrollment = {}
+    try:
+        for r in conn.execute("SELECT id, enrollment_id FROM section"):
+            sec_enrollment[r[0]] = r[1]
+    except sqlite3.OperationalError:
+        sec_enrollment = {}
+
     assignments = {}
-    for r in conn.execute(
+    if _has_spec_col:
+        _rows = conn.execute(
+            "SELECT id, faculty_id, subject_id, session_type, section_id, "
+            "lab_group_id, periods_per_week, block_length, specialization_id "
+            "FROM teaching_assignment ORDER BY id")
+    else:
+        _rows = conn.execute(
             "SELECT id, faculty_id, subject_id, session_type, section_id, "
             "lab_group_id, periods_per_week, block_length "
-            "FROM teaching_assignment ORDER BY id"):
+            "FROM teaching_assignment ORDER BY id")
+    for r in _rows:
         aid, fac_id, subj_id, stype, sec_id, lg_id = r[0:6]
-        if stype == "practical" and lg_id is not None:
+        spec_id = r[8] if (_has_spec_col and len(r) > 8) else None
+        if spec_id is not None:
+            group_key = f"specialization:{spec_id}"
+            group_label = f"specialization:{spec_id}"
+            group_size = 0  # filled from membership totals below
+        elif stype == "practical" and lg_id is not None:
             group_key = f"labgroup:{lg_id}"
             group_label = lg_names.get(lg_id, "?")
             group_size = lg_sizes.get(lg_id, 0)
@@ -194,6 +222,7 @@ def load_snapshot(conn):
             "session_type": stype, "section_id": sec_id,
             "lab_group_id": lg_id, "group_key": group_key,
             "group_label": group_label, "group_size": group_size,
+            "specialization_id": spec_id,
         }
 
     # Phase 6E: lock columns + locked_block rows when the additive schema
@@ -260,6 +289,79 @@ def load_snapshot(conn):
         except sqlite3.OperationalError:
             locked_blocks = []
 
+    # Phase 6F: specializations / memberships / slots (read-only SELECTs;
+    # absent tables -> legacy-compatible empty lists, never a migration).
+    tables = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    specializations, memberships, spec_slots = [], [], []
+    if "specialization" in tables:
+        try:
+            for r in conn.execute(
+                    "SELECT id, name, enrollment_id, session_type, "
+                    "block_length, periods_per_week FROM specialization "
+                    "ORDER BY id"):
+                specializations.append({
+                    "id": r[0], "name": r[1], "enrollment_id": r[2],
+                    "session_type": r[3], "block_length": r[4],
+                    "periods_per_week": r[5]})
+        except sqlite3.OperationalError:
+            specializations = []
+    if "specialization_membership" in tables:
+        try:
+            for r in conn.execute(
+                    "SELECT id, specialization_id, section_id, student_count "
+                    "FROM specialization_membership ORDER BY id"):
+                memberships.append({
+                    "id": r[0], "specialization_id": r[1],
+                    "section_id": r[2], "student_count": r[3]})
+        except sqlite3.OperationalError:
+            memberships = []
+    if "specialization_slot" in tables:
+        try:
+            for r in conn.execute(
+                    "SELECT id, specialization_id, day, start_period, length "
+                    "FROM specialization_slot ORDER BY id"):
+                spec_slots.append({
+                    "id": r[0], "specialization_id": r[1], "day": r[2],
+                    "start_period": r[3], "length": r[4]})
+        except sqlite3.OperationalError:
+            spec_slots = []
+    # Fill spec group sizes from membership totals (source of truth for
+    # room-capacity checks below).
+    _totals = {}
+    for m in memberships:
+        _totals[m["specialization_id"]] = _totals.get(
+            m["specialization_id"], 0) + (m["student_count"] or 0)
+    for a in assignments.values():
+        if a.get("specialization_id") is not None:
+            tot = _totals.get(a["specialization_id"], 0)
+            a["group_size"] = tot
+            a["group_label"] = next(
+                (s["name"] for s in specializations
+                 if s["id"] == a["specialization_id"]),
+                f"specialization:{a['specialization_id']}")
+
+    # ScheduledClass slot link (absent column -> None, legacy-compatible).
+    try:
+        _sc_cols = _table_cols(conn, "scheduled_class")
+        _has_slot = "slot_id" in _sc_cols
+    except Exception:
+        _has_slot = False
+    if _has_slot:
+        try:
+            _slot_by_id = {sc["id"]: sc for sc in classes}
+            for r in conn.execute(
+                    "SELECT id, slot_id FROM scheduled_class ORDER BY id"):
+                if r[0] in _slot_by_id:
+                    _slot_by_id[r[0]]["slot_id"] = r[1]
+        except sqlite3.OperationalError:
+            pass
+        for sc in classes:
+            sc.setdefault("slot_id", None)
+    else:
+        for sc in classes:
+            sc.setdefault("slot_id", None)
+
     return {
         "days": days,
         "num_periods": len(periods),
@@ -269,11 +371,19 @@ def load_snapshot(conn):
         "faculty_names": faculty_names,
         "faculty_unavailable": faculty_unavailable,
         "sec_names": sec_names,
+        "sec_sizes": sec_sizes,
+        "sec_enrollment": sec_enrollment,
         "labgroup_section": lg_sections,
         "assignments": assignments,
         "classes": classes,
         "locked_blocks": locked_blocks,
         "has_lock_schema": has_lock_cols and "locked_block" in tables,
+        "specializations": specializations,
+        "memberships": memberships,
+        "spec_slots": spec_slots,
+        "has_spec_schema": ("specialization" in tables
+                            and "specialization_membership" in tables
+                            and "specialization_slot" in tables),
     }
 
 
@@ -371,17 +481,50 @@ def audit_snapshot(snap):
     lg_sections = snap["labgroup_section"]
     section_theory_periods = defaultdict(set)   # section_id -> {(day, period)}
     labgroup_periods = defaultdict(set)         # lab_group_id -> {(day, period)}
+    # Normal section/lab occupancy for specialization overlap checks.
+    section_periods = defaultdict(set)          # section_id -> {(day, period)}
     for sc in snap["classes"]:
         a = snap["assignments"].get(sc["assignment_id"])
         if a is None:
             continue
         periods = rules.covers(sc["start_period"], sc["length"])
+        if a.get("specialization_id") is not None:
+            continue  # spec footprint handled deduped below
         if a["session_type"] == "theory" and a["section_id"]:
             for p in periods:
                 section_theory_periods[a["section_id"]].add((sc["day"], p))
+                section_periods[a["section_id"]].add((sc["day"], p))
         elif a["session_type"] == "practical" and a["lab_group_id"]:
             for p in periods:
                 labgroup_periods[a["lab_group_id"]].add((sc["day"], p))
+        elif a["section_id"]:
+            for p in periods:
+                section_periods[a["section_id"]].add((sc["day"], p))
+    # Phase 6F: specialization theory contributes ONCE per section (deduped
+    # per synchronized group); practicals never count toward HN1.
+    _spec_groups = {}  # (enrollment, day, start, length) -> {sections, theory_sections}
+    _spec_by_id = {s["id"]: s for s in snap.get("specializations", []) or []}
+    _mem_by_spec = defaultdict(list)
+    for m in snap.get("memberships", []) or []:
+        _mem_by_spec[m["specialization_id"]].append(m)
+    for sc in snap["classes"]:
+        a = snap["assignments"].get(sc["assignment_id"])
+        if a is None or a.get("specialization_id") is None:
+            continue
+        spec_id = a["specialization_id"]
+        spec = _spec_by_id.get(spec_id, {})
+        enr = spec.get("enrollment_id")
+        key = (enr, sc["day"], sc["start_period"], sc["length"])
+        g = _spec_groups.setdefault(key, {"sections": set(),
+                                          "theory_sections": set()})
+        for m in _mem_by_spec.get(spec_id, []):
+            g["sections"].add(m["section_id"])
+            if a.get("session_type") == "theory":
+                g["theory_sections"].add(m["section_id"])
+    for (_enr, _day, _st, _ln), g in _spec_groups.items():
+        for p in rules.covers(_st, _ln):
+            for sec_id in g["theory_sections"]:
+                section_theory_periods[sec_id].add((_day, p))
     grouped = defaultdict(list)
     for lg_id, sec_id, cell in rules.find_hierarchy_overlaps(
             labgroup_periods, section_theory_periods, lg_sections):
@@ -419,11 +562,175 @@ def audit_snapshot(snap):
                     sec_names.get(sec_id, f"section {sec_id}"), d, sec_id):
                 problems.append(f"MAX_TWO_THEORY VIOLATION: {res.message}")
 
+    # Phase 6F: specialization overlap (normal teaching vs synchronized
+    # spec footprint, conservative section-level). Unrelated sections may
+    # coexist; participating sections must not.
+    _spec_sec_periods = defaultdict(set)  # section_id -> {(day, period)}
+    for (_enr, _day, _st, _ln), g in _spec_groups.items():
+        for p in rules.covers(_st, _ln):
+            for sec_id in g["sections"]:
+                _spec_sec_periods[sec_id].add((_day, p))
+    for sec_id, normal_cells in sorted(section_periods.items()):
+        overlap = normal_cells & _spec_sec_periods.get(sec_id, set())
+        if overlap:
+            problems.append(
+                f"SPECIALIZATION_OVERLAP: section {sec_id} "
+                f"({snap.get('sec_names', {}).get(sec_id, '?')}) has normal "
+                f"teaching overlapping specialization slots at "
+                f"{sorted(overlap)[:5]}.")
+    # Lab-group practicals vs specialization (parent-section footprint).
+    for lg_id, sec_id in (snap.get("labgroup_section", {}) or {}).items():
+        overlap = labgroup_periods.get(lg_id, set()) & _spec_sec_periods.get(
+            sec_id, set())
+        if overlap:
+            problems.append(
+                f"SPECIALIZATION_OVERLAP: lab group {lg_id} (section {sec_id}) "
+                f"has a practical overlapping specialization slots at "
+                f"{sorted(overlap)[:5]}.")
+
     # Phase 6E: locked-block consistency (no-ops when the additive schema
     # is absent; always read-only).
     problems.extend(audit_locked_blocks(snap))
 
+    # Phase 6F: specialization domain consistency (read-only).
+    problems.extend(audit_specializations(snap))
+
     return problems, notes
+
+
+def audit_specializations(snap):
+    """Phase 6F read-only checks over specialization domain data.
+
+    Covers: orphans, invalid memberships, cross-enrollment, aggregate and
+    room capacity, synchronization, and slot/geometry sanity. Never writes.
+    """
+    problems = []
+    specs = snap.get("specializations", []) or []
+    mems = snap.get("memberships", []) or []
+    slots = snap.get("spec_slots", []) or []
+    if not snap.get("has_spec_schema", False) and not specs \
+            and not mems and not slots:
+        return problems
+    by_id = {s["id"]: s for s in specs}
+    sec_sizes = snap.get("sec_sizes", {}) or {}
+    sec_enr = snap.get("sec_enrollment", {}) or {}
+    sec_names = snap.get("sec_names", {}) or {}
+    # Orphans: membership/slot referencing missing spec/section.
+    for m in mems:
+        if m["specialization_id"] not in by_id:
+            problems.append(
+                f"SPECIALIZATION_ORPHAN: membership {m['id']} references "
+                f"missing specialization {m['specialization_id']}.")
+        if m["section_id"] not in sec_sizes:
+            problems.append(
+                f"SPECIALIZATION_ORPHAN: membership {m['id']} references "
+                f"missing section {m['section_id']}.")
+        if not isinstance(m["student_count"], int) or m["student_count"] <= 0:
+            problems.append(
+                f"SPECIALIZATION_MEMBERSHIP_INVALID: membership {m['id']} "
+                f"has invalid count {m['student_count']!r} (must be > 0).")
+    for sl in slots:
+        if sl["specialization_id"] not in by_id:
+            problems.append(
+                f"SPECIALIZATION_ORPHAN: slot {sl['id']} references missing "
+                f"specialization {sl['specialization_id']}.")
+    for s in specs:
+        if s.get("enrollment_id") is None:
+            problems.append(
+                f"SPECIALIZATION_ORPHAN: specialization {s['id']} "
+                f"('{s.get('name', '?')}') has no enrollment/cohort.")
+    # Enrollment invariant + aggregate capacity per section.
+    mem_by_section = defaultdict(list)
+    for m in mems:
+        mem_by_section[m["section_id"]].append(m)
+    for m in mems:
+        spec = by_id.get(m["specialization_id"])
+        if spec is None:
+            continue
+        s_enr = sec_enr.get(m["section_id"])
+        if s_enr is not None and spec.get("enrollment_id") != s_enr:
+            problems.append(
+                f"SPECIALIZATION_ENROLLMENT: section {m['section_id']} "
+                f"(enrollment {s_enr}) cannot join specialization "
+                f"{spec['id']} ('{spec.get('name', '?')}', enrollment "
+                f"{spec.get('enrollment_id')}): cross-cohort membership.")
+    for sec_id, lst in sorted(mem_by_section.items()):
+        cap = sec_sizes.get(sec_id, 0) or 0
+        total = sum((m["student_count"] or 0) for m in lst)
+        if cap and total > cap:
+            problems.append(
+                f"SPECIALIZATION_CAPACITY: section {sec_id} "
+                f"({sec_names.get(sec_id, '?')}, {cap} enrolled) allocates "
+                f"{total} students across specializations "
+                f"{sorted(m['specialization_id'] for m in lst)}: exceeds "
+                f"enrollment.")
+    # Room capacity for scheduled spec classes (total vs room).
+    totals = {}
+    for m in mems:
+        totals[m["specialization_id"]] = totals.get(
+            m["specialization_id"], 0) + (m["student_count"] or 0)
+    for sc in snap.get("classes", []) or []:
+        a = snap.get("assignments", {}).get(sc["assignment_id"])
+        if a is None or a.get("specialization_id") is None:
+            continue
+        spec_id = a["specialization_id"]
+        total = totals.get(spec_id, 0) or 0
+        room = snap.get("rooms", {}).get(sc["room_id"])
+        if room is not None and (room.get("capacity") or 0) < total:
+            problems.append(
+                f"SPECIALIZATION_ROOM_CAPACITY: specialization {spec_id} "
+                f"({total} students) in room {room.get('name', '?')} "
+                f"(capacity {room.get('capacity')}) at "
+                f"{sc['day']} period {sc['start_period']}: undersized room.")
+    # Synchronization: active specs (with memberships) sharing an enrollment
+    # must have identical slot patterns (day/start/length). Empty (unscheduled)
+    # cohorts pass; single-spec cohorts always pass.
+    active_by_enr = defaultdict(list)
+    for s in specs:
+        has_mem = any(m["specialization_id"] == s["id"] for m in mems)
+        if has_mem:
+            active_by_enr[s.get("enrollment_id")].append(s["id"])
+    slots_by_spec = defaultdict(list)
+    for sl in slots:
+        slots_by_spec[sl["specialization_id"]].append(
+            (sl["day"], sl["start_period"], sl["length"]))
+    for enr, sids in sorted(active_by_enr.items(), key=lambda kv: str(kv[0])):
+        if len(sids) <= 1:
+            continue
+        # If none have slots yet (unscheduled), not a violation.
+        if not any(slots_by_spec.get(sid) for sid in sids):
+            continue
+        ref = sorted(slots_by_spec.get(sorted(sids, key=str)[0], []))
+        for sid in sorted(sids, key=str)[1:]:
+            got = sorted(slots_by_spec.get(sid, []))
+            if got != ref:
+                problems.append(
+                    f"SPECIALIZATION_SYNC: specialization {sid} slots {got} "
+                    f"do not match cohort {enr} pattern {ref}: all "
+                    f"specializations must share identical (day, start, "
+                    f"length).")
+    # Slot geometry sanity (day/period/break) via shared rules.
+    days = snap.get("days", []) or []
+    num_periods = snap.get("num_periods", 0) or 0
+    break_after = snap.get("break_after")
+    for sl in slots:
+        res = rules.check_day_known(sl["day"], days)
+        if not res.ok:
+            problems.append(
+                f"SPECIALIZATION_SYNC: slot {sl['id']} has unknown day "
+                f"'{sl['day']}'.")
+        res = rules.check_block_geometry(sl["start_period"], sl["length"],
+                                         num_periods)
+        if not res.ok:
+            problems.append(
+                f"SPECIALIZATION_SYNC: slot {sl['id']} geometry invalid: "
+                f"{res.message}")
+        res = rules.check_break_geometry(sl["start_period"], sl["length"],
+                                         break_after)
+        if not res.ok:
+            problems.append(
+                f"SPECIALIZATION_SYNC: slot {sl['id']} spans the break.")
+    return problems
 
 
 def audit_locked_blocks(snap):

@@ -730,6 +730,9 @@ def api_subject_delete(sid):
 @login_required
 def api_assignment_create():
     # Same block-length rule, load accounting, and messages as the Jinja form.
+    # Phase 6F: when specialization_id is provided, the assignment teaches
+    # one specialization (cross-section group); section/lab stay NULL and
+    # the subject must belong to the specialization's enrollment/cohort.
     data = _data()
     session_type = _require_str(data, "session_type")
     faculty_id = _required_int(data, "faculty_id")
@@ -747,6 +750,56 @@ def api_assignment_create():
     prior_total = db.session.query(
         func.coalesce(func.sum(TeachingAssignment.periods_per_week), 0)
     ).filter_by(faculty_id=faculty_id).scalar()
+
+    spec_raw = data.get("specialization_id", "")
+    if spec_raw not in ("", None):
+        try:
+            spec_id = int(spec_raw)
+        except (TypeError, ValueError):
+            raise ApiError("Invalid input.", 422,
+                           {"specialization_id": "Must be a whole number."})
+        from backend.models import Specialization, Subject
+        spec = Specialization.query.get(spec_id)
+        if not spec:
+            raise ApiError("Specialization not found.", 404)
+        subject_id = _required_int(data, "subject_id")
+        subj = Subject.query.get(subject_id)
+        if not subj:
+            raise ApiError("Subject not found.", 404)
+        if subj.enrollment_id != spec.enrollment_id:
+            raise ApiError(
+                f"Subject enrollment does not match specialization cohort.",
+                422, None, code="SPECIALIZATION_ENROLLMENT",
+                details={"specialization_id": spec.id,
+                         "specialization_enrollment_id": spec.enrollment_id,
+                         "subject_id": subj.id,
+                         "subject_enrollment_id": subj.enrollment_id},
+                failures=[{"code": "SPECIALIZATION_ENROLLMENT",
+                           "message": "Subject enrollment does not match "
+                                      "specialization cohort.",
+                           "details": {"specialization_id": spec.id,
+                                       "subject_id": subj.id}}])
+        a = TeachingAssignment(
+            faculty_id=faculty_id, subject_id=subject_id,
+            session_type=session_type, section_id=None, lab_group_id=None,
+            specialization_id=spec.id,
+            periods_per_week=periods_per_week, block_length=block_length)
+        db.session.add(a)
+        db.session.commit()
+        new_total = prior_total + periods_per_week
+        message = (f"Specialization assignment added for '{spec.name}'. "
+                   f"{fac.name}'s weekly load is now {new_total} hrs "
+                   f"(was {prior_total}).")
+        category = "success"
+        if fac.weekly_max_hours and new_total > fac.weekly_max_hours:
+            message += (f" ⚠ This exceeds their configured max of "
+                        f"{fac.weekly_max_hours} hrs/week.")
+            category = "warning"
+        return jsonify({"ok": True, "message": message, "category": category,
+                        "assignment": {"id": a.id, "group": a.group_label(),
+                                       "specialization_id": spec.id},
+                        "faculty_load": {"before": prior_total,
+                                         "after": new_total}}), 201
 
     if session_type == "theory":
         a = TeachingAssignment(
@@ -838,18 +891,44 @@ def api_schedule_run():
     locked_ids = sorted({p.get("locked_block_id") for p in locked_placements
                          if p.get("locked_block_id") is not None})
 
+    # Phase 6F: specialization cohorts enter the solver as synchronized
+    # sessions (same day/start per session index; rooms/faculty may differ).
+    try:
+        from backend import specializations as spec_svc
+        specialization_data = spec_svc.query_spec_info(db)
+    except Exception:
+        specialization_data = {}
+    # Drop empty specs (no memberships): configured but not schedulable.
+    specialization_data = {sid: info for sid, info in
+                           (specialization_data or {}).items()
+                           if (info.get("section_ids") and
+                               (info.get("total_students", 0) or 0) > 0)}
+
     status, placements, message = run_scheduler(
         assignments, rooms, faculty_unavail, days, len(periods),
         cfg.break_after_periods if cfg.break_after_periods else None,
         cfg.max_consecutive_teaching,
         time_limit_seconds=30,
         locked_placements=locked_placements,
+        specialization_data=specialization_data,
     )
 
     if status in ("INFEASIBLE", "NO_SESSIONS"):
         # FAILURE: preserve the previous schedule — nothing is deleted or
         # written here. Locked-caused infeasibility carries a structured
         # SCHEDULING_INFEASIBLE payload identifying the blocking locks.
+        # Phase 6F: specialization infeasibility carries its stable code
+        # (SPECIALIZATION_SYNC/CAPACITY/OVERLAP/...) for administrators.
+        msg = message or ""
+        for _code in ("SPECIALIZATION_SYNC", "SPECIALIZATION_CAPACITY",
+                      "SPECIALIZATION_OVERLAP", "SPECIALIZATION_ENROLLMENT",
+                      "SPECIALIZATION_MEMBERSHIP"):
+            if _code in msg:
+                raise ApiError(
+                    f"Scheduling failed: {msg}", 422, code=_code,
+                    details={"reason": msg},
+                    failures=[{"code": _code, "message": msg,
+                               "details": {}}])
         if locked_ids and status == "INFEASIBLE":
             raise ApiError(
                 f"Scheduling failed: {message}", 422,
@@ -863,6 +942,8 @@ def api_schedule_run():
 
     # SUCCESS: atomically replace non-locked rows; locked rows stay exactly
     # where they are (same day/start/length/room/faculty).
+    # Phase 6F: specialization slots are scheduler output (synchronized
+    # pattern persisted per spec); spec classes link via slot_id.
     run_id = uuid.uuid4().hex[:10]
     try:
         db.session.query(ScheduledClass).filter(
@@ -871,15 +952,71 @@ def api_schedule_run():
         # Pre-6C database without lock columns: legacy wipe-and-replace.
         db.session.rollback()
         ScheduledClass.query.delete()
+    # Separate normal vs specialization placements (spec assignments carry
+    # specialization_id; ScheduledClass stays the source of truth).
+    try:
+        from backend.models import SpecializationSlot
+        _assign_spec = {a.id: getattr(a, "specialization_id", None)
+                        for a in assignments}
+    except Exception:
+        SpecializationSlot = None
+        _assign_spec = {}
+    _spec_slots_cache = {}  # (spec_id, day, start, length) -> slot_id
     for p in placements:
+        spec_id = _assign_spec.get(p["assignment_id"])
+        slot_id = None
+        if spec_id is not None and SpecializationSlot is not None:
+            key = (spec_id, p["day"], p["start_period"], p["length"])
+            slot_id = _spec_slots_cache.get(key)
+            if slot_id is None:
+                existing = SpecializationSlot.query.filter_by(
+                    specialization_id=spec_id, day=p["day"],
+                    start_period=p["start_period"],
+                    length=p["length"]).first()
+                if existing is None:
+                    row = SpecializationSlot(
+                        specialization_id=spec_id, day=p["day"],
+                        start_period=p["start_period"], length=p["length"])
+                    db.session.add(row)
+                    db.session.flush()
+                    slot_id = row.id
+                else:
+                    slot_id = existing.id
+                _spec_slots_cache[key] = slot_id
         db.session.add(ScheduledClass(
             assignment_id=p["assignment_id"], day=p["day"], start_period=p["start_period"],
-            length=p["length"], room_id=p["room_id"], run_id=run_id))
+            length=p["length"], room_id=p["room_id"], run_id=run_id,
+            slot_id=slot_id))
+    # Prune stale specialization slots no longer referenced by any class
+    # (keeps the synchronized pattern exactly equal to the schedule).
+    try:
+        if SpecializationSlot is not None:
+            live_slot_ids = set(_spec_slots_cache.values())
+            # Keep slots that still back a locked class (locked rows were
+            # preserved above and were not re-emitted in placements).
+            for sc in ScheduledClass.query.filter(
+                    ScheduledClass.slot_id.isnot(None)).all():
+                if sc.slot_id is not None:
+                    live_slot_ids.add(sc.slot_id)
+            if live_slot_ids:
+                SpecializationSlot.query.filter(
+                    ~SpecializationSlot.id.in_(live_slot_ids)).delete(
+                        synchronize_session=False)
+            else:
+                # No spec schedule at all: clear orphan slots only when no
+                # spec classes remain (never touch unscheduled config? slots
+                # ARE schedule output in 6F, so empty schedule clears them).
+                if ScheduledClass.query.filter(
+                        ScheduledClass.slot_id.isnot(None)).count() == 0:
+                    SpecializationSlot.query.delete()
+    except Exception:
+        pass
     db.session.commit()
     return jsonify({"ok": True,
                     "message": f"Timetable generated ({status}). {len(placements)} class blocks placed.",
                     "status": status, "placements": len(placements), "run_id": run_id,
-                    "locked_preserved": len(locked_ids)})
+                    "locked_preserved": len(locked_ids),
+                    "specializations_scheduled": len(_spec_slots_cache)})
 
 
 # ------------------------------------------------------- locked blocks (6E)
@@ -980,6 +1117,162 @@ def api_locked_block_delete(bid):
                        code=payload["code"], details=payload["details"],
                        failures=payload["failures"])
     return jsonify({"ok": True, "message": "Locked block deleted."})
+
+
+# ------------------------------------------------- specializations (6F)
+def _spec_payload(spec_id):
+    """Full schedule payload for one specialization (future frontend)."""
+    from backend.models import (ScheduledClass, Specialization,
+                                SpecializationMembership, SpecializationSlot,
+                                TeachingAssignment)
+    from backend import specializations as spec_svc
+    spec = Specialization.query.get(spec_id)
+    if not spec:
+        return None
+    mems = SpecializationMembership.query.filter_by(
+        specialization_id=spec.id).all()
+    slots = SpecializationSlot.query.filter_by(
+        specialization_id=spec.id).order_by(
+            SpecializationSlot.day, SpecializationSlot.start_period).all()
+    assign_ids = [a.id for a in TeachingAssignment.query.filter_by(
+        specialization_id=spec.id).all()]
+    if assign_ids:
+        classes = ScheduledClass.query.filter(
+            ScheduledClass.assignment_id.in_(assign_ids)).order_by(
+                ScheduledClass.day, ScheduledClass.start_period).all()
+    else:
+        classes = []
+    out_classes = []
+    for sc in classes:
+        a = TeachingAssignment.query.get(sc.assignment_id)
+        fac = a.faculty.name if a and a.faculty else "?"
+        room = sc.room.name if sc.room else "?"
+        subj = a.subject.name if a and a.subject else "?"
+        out_classes.append({"id": sc.id, "assignment_id": sc.assignment_id,
+                            "subject": subj, "faculty": fac, "room": room,
+                            "faculty_id": a.faculty_id if a else None,
+                            "room_id": sc.room_id, "day": sc.day,
+                            "start_period": sc.start_period,
+                            "length": sc.length, "slot_id": sc.slot_id,
+                            "session_type": a.session_type if a else spec.session_type})
+    return spec_svc.specialization_json(
+        spec, memberships=mems, slots=slots, scheduled=out_classes,
+        total=sum(m.student_count for m in mems))
+
+
+@api_bp.route("/specializations", methods=["GET"])
+@login_required
+def api_specializations_list():
+    """READ: list specializations with memberships, slots, and schedule."""
+    from backend.models import Specialization
+    try:
+        specs = Specialization.query.order_by(Specialization.id).all()
+    except Exception:
+        return jsonify({"specializations": []})
+    return jsonify({"specializations": [_spec_payload(s.id) for s in specs]})
+
+
+@api_bp.route("/specializations/<int:sid>", methods=["GET"])
+@login_required
+def api_specialization_get(sid):
+    payload = _spec_payload(sid)
+    if payload is None:
+        raise ApiError("Specialization not found.", 404)
+    return jsonify({"specialization": payload})
+
+
+@api_bp.route("/specializations", methods=["POST"])
+@login_required
+def api_specialization_create():
+    """CREATE: {name, enrollment_id, session_type?, block_length?,
+    periods_per_week?}. Defaults keep the documented minimal payload
+    {name, enrollment_id} working: theory / 1 / 2."""
+    from backend import specializations as spec_svc
+    data = _data()
+    name = (data.get("name") or "").strip() \
+        if isinstance(data.get("name"), str) else ""
+    if not name:
+        raise ApiError("Missing required fields.", 422,
+                       {"name": "This field is required."})
+    enrollment_id = _required_int(data, "enrollment_id")
+    session_type = (data.get("session_type") or "theory").strip() \
+        if isinstance(data.get("session_type"), str) \
+        else (data.get("session_type") or "theory")
+    block_length = _optional_int(data, "block_length", default=1)
+    periods_per_week = _optional_int(data, "periods_per_week", default=2)
+    try:
+        spec = spec_svc.create_specialization(
+            db, name=name, enrollment_id=enrollment_id,
+            session_type=session_type, block_length=block_length,
+            periods_per_week=periods_per_week)
+    except spec_svc.SpecializationError as exc:
+        payload = exc.to_payload()
+        raise ApiError(payload["error"], 422, None, code=payload["code"],
+                       details=payload["details"],
+                       failures=payload["failures"])
+    return jsonify({"ok": True,
+                    "message": f"Specialization '{spec.name}' added.",
+                    "specialization": _spec_payload(spec.id)}), 201
+
+
+@api_bp.route("/specializations/<int:sid>/delete", methods=["POST"])
+@login_required
+def api_specialization_delete(sid):
+    from backend import specializations as spec_svc
+    try:
+        spec_svc.delete_specialization(db, sid)
+    except spec_svc.SpecializationError as exc:
+        payload = exc.to_payload()
+        raise ApiError(payload["error"], 404
+                       if "does not exist" in payload["error"] else 422,
+                       code=payload["code"], details=payload["details"],
+                       failures=payload["failures"])
+    return jsonify({"ok": True, "message": "Specialization deleted."})
+
+
+@api_bp.route("/specializations/<int:sid>/memberships", methods=["POST"])
+@login_required
+def api_specialization_membership_upsert(sid):
+    """Add/update membership (upsert): {section_id, student_count}."""
+    from backend import specializations as spec_svc
+    data = _data()
+    section_id = _required_int(data, "section_id")
+    student_count = _required_int(data, "student_count")
+    try:
+        row = spec_svc.add_or_update_membership(
+            db, sid, section_id, student_count)
+    except spec_svc.SpecializationError as exc:
+        payload = exc.to_payload()
+        raise ApiError(payload["error"], 422, None, code=payload["code"],
+                       details=payload["details"],
+                       failures=payload["failures"])
+    return jsonify({"ok": True,
+                    "message": "Membership saved.",
+                    "membership": {"id": row.id,
+                                   "specialization_id": row.specialization_id,
+                                   "section_id": row.section_id,
+                                   "student_count": row.student_count},
+                    "specialization": _spec_payload(sid)}), 201
+
+
+@api_bp.route("/specializations/<int:sid>/memberships/delete",
+              methods=["POST"])
+@login_required
+def api_specialization_membership_delete(sid):
+    """POST-style delete: {section_id}."""
+    from backend import specializations as spec_svc
+    data = _data()
+    section_id = _required_int(data, "section_id")
+    try:
+        spec_svc.delete_membership(db, sid, section_id)
+    except spec_svc.SpecializationError as exc:
+        payload = exc.to_payload()
+        raise ApiError(payload["error"], 404
+                       if "No membership" in payload["error"] else 422,
+                       code=payload["code"], details=payload["details"],
+                       failures=payload["failures"])
+    return jsonify({"ok": True, "message": "Membership deleted.",
+                    "specialization": _spec_payload(sid)})
 
 
 # ------------------------------------------------------------------ wiring

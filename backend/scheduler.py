@@ -146,6 +146,10 @@ def _residual_assignments(assignments, locked_periods):
         r.periods_per_week = remaining
         r.block_length = orig.block_length
         r.lab_group = getattr(orig, "lab_group", None)
+        # Phase 6F: preserve the specialization link on residual copies so
+        # spec assignments stay on the spec path (group size comes from
+        # membership totals, never from section size).
+        r.specialization_id = getattr(orig, "specialization_id", None)
         r._orig = orig
 
         def _gk(self=orig):
@@ -157,8 +161,86 @@ def _residual_assignments(assignments, locked_periods):
         r.group_key = _gk
         r.group_label = _gl
         r.group_size = _gs
+        # Keep attribute access compatible with spec expansion.
+        try:
+            r.specialization = getattr(orig, "specialization", None)
+        except Exception:
+            pass
         residual.append(r)
     return residual, skipped
+
+
+def _is_spec_assignment(a):
+    """Phase 6F: True when an assignment teaches a specialization."""
+    try:
+        return getattr(a, "specialization_id", None) is not None
+    except Exception:
+        return False
+
+
+def _expand_spec_sessions(spec_assignments, spec_info):
+    """Phase 6F: expand specialization assignments into session dicts.
+
+    `spec_info`: {spec_id: {enrollment_id, section_ids, total_students,
+    session_type, name}}. Assignments without membership (total 0 / no
+    sections) produce no sessions (empty specialization during config).
+    Returns (sessions, sessions_by_spec) where sessions is a flat list and
+    sessions_by_spec maps spec_id -> list of session indexes into `sessions`
+    in deterministic per-spec order (assignments sorted by id).
+    """
+    sessions = []
+    by_spec = {}
+    # Group assignments per spec in id order for deterministic indexing.
+    per_spec = {}
+    for a in spec_assignments or []:
+        sid = getattr(a, "specialization_id", None)
+        per_spec.setdefault(sid, []).append(a)
+    for sid in sorted(per_spec, key=lambda x: (str(x))):
+        info = (spec_info or {}).get(sid, {})
+        total = info.get("total_students", 0) or 0
+        section_ids = list(info.get("section_ids", []) or [])
+        enrollment_id = info.get("enrollment_id")
+        spec_name = info.get("name", str(sid))
+        if not section_ids or total <= 0:
+            by_spec[sid] = []
+            continue
+        assigns = sorted(per_spec[sid],
+                         key=lambda x: getattr(x, "id", 0) or 0)
+        idx_list = []
+        for a in assigns:
+            remaining = getattr(a, "periods_per_week", 0) or 0
+            block = getattr(a, "block_length", 1) or 1
+            seq = 0
+            while remaining > 0:
+                length = block if remaining >= block else remaining
+                s_idx = len(sessions)
+                # Faculty label for messages.
+                try:
+                    glabel = a.group_label()
+                except Exception:
+                    glabel = f"SPEC:{spec_name}"
+                sessions.append({
+                    "assignment_id": getattr(a, "id", None),
+                    "spec_id": sid,
+                    "enrollment_id": enrollment_id,
+                    "faculty_id": getattr(a, "faculty_id", None),
+                    "subject_id": getattr(a, "subject_id", None),
+                    "session_type": getattr(a, "session_type", "theory"),
+                    "length": length,
+                    "seq": seq,
+                    "spec_index": len(idx_list),
+                    "group_key": f"specialization:{sid}",
+                    "group_label": glabel,
+                    "group_size": total,
+                    "section_ids": list(section_ids),
+                    "total_students": total,
+                    "spec_name": spec_name,
+                })
+                idx_list.append(s_idx)
+                remaining -= length
+                seq += 1
+        by_spec[sid] = idx_list
+    return sessions, by_spec
 
 
 def _locked_occupancy(locked_placements):
@@ -184,7 +266,7 @@ def _locked_occupancy(locked_placements):
 
 def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
                    break_after, max_consecutive, time_limit_seconds=30,
-                   locked_placements=None):
+                   locked_placements=None, specialization_data=None):
     """
     faculty_unavailable: dict faculty_id -> set of "day:period" strings
     locked_placements: optional list of fixed dicts, each with
@@ -193,6 +275,14 @@ def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
         They enter occupancy BEFORE solving: conflicting normal candidates
         are pruned and CP-SAT constraints count locked periods as constants.
         Locked rows are never moved, never re-emitted in `placements`.
+    specialization_data: optional {spec_id: {enrollment_id, section_ids,
+        total_students, session_type, name}} for Phase 6F synchronized
+        cohorts. Spec assignments (TeachingAssignment.specialization_id set)
+        expand via membership totals; empty specs (no sections/total 0)
+        produce no sessions. Cohorts synchronize explicitly (equal day/start
+        per session index); section occupancy counts once per cohort;
+        HN1 counts spec theory once per section. When None/empty the
+        encoding is identical to Phase 6E.
     Returns: (status_str, list_of_placements) where each placement is
              {assignment_id, seq, day, start_period, length, room_id}
              or (status_str, []) / (status_str, None) with a message on failure.
@@ -313,7 +403,68 @@ def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
         if not residual:
             return "OPTIMAL", [], None
 
-    sessions = expand_sessions(residual)
+    # ---- Phase 6F: split normal vs specialization assignments ----
+    specialization_data = dict(specialization_data or {})
+    normal_assignments = [a for a in residual if not _is_spec_assignment(a)]
+    spec_assignments = [a for a in residual if _is_spec_assignment(a)]
+    sessions = expand_sessions(normal_assignments)
+    spec_sessions, spec_by_spec = _expand_spec_sessions(
+        spec_assignments, specialization_data)
+    # Active cohorts: enrollment -> [spec_ids with sessions].
+    spec_cohorts = {}
+    spec_section_union = {}  # section_id -> enrollment_id (one cohort per section)
+    if spec_sessions:
+        for sid, idxs in spec_by_spec.items():
+            if not idxs:
+                continue
+            info = specialization_data.get(sid, {})
+            enr = info.get("enrollment_id")
+            spec_cohorts.setdefault(enr, []).append(sid)
+            for sec in info.get("section_ids", []) or []:
+                # Enrollment invariant is enforced at membership time; the
+                # scheduler trusts it and maps each section to its cohort.
+                spec_section_union.setdefault(sec, enr)
+        # Sync feasibility: same session count + same (length, type) per index.
+        for enr, sids in sorted(spec_cohorts.items(), key=lambda kv: str(kv[0])):
+            sigs = {}
+            for sid in sids:
+                seq = [(spec_sessions[i]["length"],
+                        spec_sessions[i]["session_type"])
+                       for i in spec_by_spec.get(sid, [])]
+                sigs[sid] = seq
+            ref_sid = sorted(sids, key=str)[0]
+            ref = sigs[ref_sid]
+            for sid in sorted(sids, key=str)[1:]:
+                if sigs[sid] != ref:
+                    return ("INFEASIBLE", [],
+                            f"SPECIALIZATION_SYNC: specialization {sid} demand "
+                            f"{sigs[sid]} does not match cohort pattern {ref} "
+                            f"in enrollment {enr}: all specializations must share "
+                            f"identical session counts, block lengths, and session "
+                            f"types.")
+        # Per-cohort ordered session-index matrix for equality constraints:
+        # cohort_order[enr] = {index_i: {spec_id: global_s_idx}}.
+        # NOTE: spec_by_spec holds LOCAL indexes into spec_sessions; they
+        # are converted to GLOBAL indexes after the combined list is built.
+    cohort_order = {}
+    num_normal = len(sessions)
+    if spec_sessions and spec_cohorts:
+        for enr, sids in spec_cohorts.items():
+            sids_sorted = sorted(sids, key=str)
+            n = len(spec_by_spec.get(sids_sorted[0], []))
+            order = {}
+            for i in range(n):
+                per_spec = {}
+                for sid in sids_sorted:
+                    per_spec[sid] = num_normal + spec_by_spec[sid][i]
+                order[i] = per_spec
+            cohort_order[enr] = order
+        # Convert per-spec lists to global indexes for later use.
+        for sid in list(spec_by_spec.keys()):
+            spec_by_spec[sid] = [num_normal + li for li in spec_by_spec[sid]]
+    # Combined session list preserves 6E behavior when no specs exist.
+    sessions = list(sessions) + list(spec_sessions)
+    is_spec_idx = [False] * num_normal + [True] * len(spec_sessions)
     if not sessions:
         return "NO_SESSIONS", [], "No teaching assignments to schedule."
 
@@ -335,11 +486,23 @@ def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
 
     def _conflicts_locked(sess, day, start, room_id):
         length = sess["length"]
+        # Phase 6F: specialization sessions occupy every participating
+        # section (conservative section-level model).
+        spec_sections = sess.get("section_ids") or []
         for p in range(start, start + length):
             if (room_id, day, p) in locked_room:
                 return True
             if (sess["faculty_id"], day, p) in locked_fac:
                 return True
+            if spec_sections:
+                for sec_id in spec_sections:
+                    if (f"section:{sec_id}", day, p) in locked_group:
+                        return True
+                    if (f"__parent__:section:{sec_id}", day, p) in locked_parent_fp:
+                        return True
+                # Spec group keys never collide with locked normal groups;
+                # room/faculty/section checks above are the footprint.
+                continue
             if (sess["group_key"], day, p) in locked_group:
                 return True
             parent = sess.get("parent_section_key")
@@ -353,9 +516,30 @@ def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
     def _locked_sec_theory_cells():
         return _locked_sec_theory
 
+    def _spec_hn1_prune(sess, day, start):
+        """Phase 6F: prune a spec theory candidate when candidate + locked
+        theory alone already covers a 3-window for ANY participating
+        section (unavoidable in any solution containing it)."""
+        if sess.get("session_type") != "theory":
+            return False
+        for sec_id in sess.get("section_ids", []) or []:
+            combo = (set(locked_theory_day.get((f"section:{sec_id}", day), set()))
+                     | set(range(start, start + sess["length"])))
+            if check_max_two_theory(combo, num_periods, break_after,
+                                    sess.get("group_label", "?"), day):
+                return True
+        return False
+
     for s_idx, sess in enumerate(sessions):
         rooms_ok = compatible_rooms(sess, rooms)
         if not rooms_ok:
+            if is_spec_idx[s_idx]:
+                return ("INFEASIBLE", [],
+                        f"SPECIALIZATION_CAPACITY: no compatible room exists "
+                        f"for specialization '{sess.get('spec_name', '?')}' "
+                        f"({sess['session_type']}, {sess['group_size']} students). "
+                        f"Add a {'lab' if sess['session_type']=='practical' else 'theory'} "
+                        f"room with enough capacity.")
             return "INFEASIBLE", [], (
                 f"No compatible room exists for '{sess['group_label']}' "
                 f"({sess['session_type']}, {sess['group_size']} students). "
@@ -386,6 +570,12 @@ def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
                     if check_max_two_theory(combo, num_periods, break_after,
                                             sess["group_label"], day):
                         continue
+                # Phase 6F: same pruning for specialization theory, once
+                # per participating section (never multiply-counted).
+                if (locked_placements and is_spec_idx[s_idx]
+                        and sess["session_type"] == "theory"):
+                    if _spec_hn1_prune(sess, day, start):
+                        continue
                 # Phase 6E: H12 pruning — candidate + locked faculty run
                 # already exceeding the limit can never be repaired.
                 if max_consecutive and max_consecutive > 0 and locked_placements:
@@ -411,8 +601,16 @@ def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
     for s_idx, sess in enumerate(sessions):
         opts = session_options[s_idx]
         if not opts:
-            msg = (f"'{sess['group_label']}' ({sess['subject_id']}) has no legal "
-                   f"day/period/room slot at all — check faculty availability and room setup.")
+            if is_spec_idx[s_idx]:
+                msg = (f"SPECIALIZATION_OVERLAP: specialization "
+                       f"'{sess.get('spec_name', '?')}' "
+                       f"(assignment {sess['assignment_id']}) has no legal "
+                       f"day/period/room slot — check faculty availability, "
+                       f"rooms, locked blocks, and participating-section "
+                       f"occupancy.")
+            else:
+                msg = (f"'{sess['group_label']}' ({sess['subject_id']}) has no legal "
+                       f"day/period/room slot at all — check faculty availability and room setup.")
             if locked_ids:
                 msg += (f" Locked block(s) {sorted(locked_ids)} leave no feasible "
                         f"placement for assignment {sess['assignment_id']}.")
@@ -459,7 +657,7 @@ def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
     # since the lab group's students are also section students)
     parent_of = {}
     for sess in sessions:
-        if sess["parent_section_key"]:
+        if sess.get("parent_section_key"):
             parent_of[sess["group_key"]] = sess["parent_section_key"]
     for child_key, parent_key in parent_of.items():
         dp_keys = {k[1:] for k in group_occ if k[0] == child_key} | {k[1:] for k in group_occ if k[0] == parent_key}
@@ -468,6 +666,101 @@ def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
             parent_vars = group_occ.get((parent_key, d, p), [])
             if child_vars and parent_vars:
                 model.Add(sum(child_vars) + sum(parent_vars) <= 1)
+
+    # ---- Phase 6F: specialization synchronization + section occupancy ----
+    # Explicit equality (never hope independent choices coincide):
+    # start(Cyber,i) = start(AI,i) = start(FullStack,i) and day equal,
+    # lengths already validated equal. Rooms/faculty may differ.
+    if cohort_order:
+        for enr, order in cohort_order.items():
+            for i, per_spec in order.items():
+                lengths = {sessions[gidx]["length"] for gidx in per_spec.values()}
+                if len(lengths) != 1:
+                    return ("INFEASIBLE", [],
+                            f"SPECIALIZATION_SYNC: block lengths differ within "
+                            f"cohort {enr} session {i}: {sorted(lengths)}.")
+                all_ds = set()
+                for gidx in per_spec.values():
+                    for (d, st, _r) in session_options[gidx]:
+                        all_ds.add((d, st))
+                first_sid = sorted(per_spec, key=str)[0]
+                first_gidx = per_spec[first_sid]
+                for (d, st) in sorted(all_ds):
+                    first_vars = [x[(first_gidx, d, st, r)]
+                                  for (dd, ss, r) in session_options[first_gidx]
+                                  if dd == d and ss == st
+                                  and (first_gidx, d, st, r) in x]
+                    for sid in sorted(per_spec, key=str)[1:]:
+                        gidx = per_spec[sid]
+                        other_vars = [x[(gidx, d, st, r)]
+                                      for (dd, ss, r) in session_options[gidx]
+                                      if dd == d and ss == st
+                                      and (gidx, d, st, r) in x]
+                        if not first_vars and not other_vars:
+                            continue
+                        model.Add(sum(first_vars) == sum(other_vars))
+        # Cohort internal non-overlap + conservative section blocking.
+        # A synchronized slot blocks every participating section once
+        # (never triple-counted): representative indicator per (cohort,i).
+        for enr, order in cohort_order.items():
+            sids_sorted = sorted(order[0].keys(), key=str) if order else []
+            if not sids_sorted:
+                continue
+            rep_by_i = {i: per_spec[sids_sorted[0]]
+                        for i, per_spec in order.items()}
+            sections_in_cohort = sorted(
+                sec for sec, e in spec_section_union.items() if e == enr)
+            # Internal: at most one synchronized session covers a cell.
+            for d in days:
+                for p in range(num_periods):
+                    covering = []
+                    for i, rep_idx in rep_by_i.items():
+                        rep_len = sessions[rep_idx]["length"]
+                        for (od, st, r) in session_options[rep_idx]:
+                            if od != d:
+                                continue
+                            if st <= p < st + rep_len:
+                                covering.append(x[(rep_idx, od, st, r)])
+                    if len(covering) > 1:
+                        model.Add(sum(covering) <= 1)
+            # Section blocking: normal section + cohort <= 1; each lab-group
+            # of a participating section + cohort <= 1 (parallel labs of the
+            # same section stay allowed when no specialization runs).
+            lab_parent = {}  # lab group_key -> parent section id (int)
+            for child_key, parent_key in parent_of.items():
+                if parent_key.startswith("section:"):
+                    try:
+                        pid = int(parent_key.split(":", 1)[1])
+                    except (ValueError, IndexError):
+                        continue
+                    lab_parent[child_key] = pid
+            for sec_id in sections_in_cohort:
+                sec_key = f"section:{sec_id}"
+                for d in days:
+                    for p in range(num_periods):
+                        cohort_vars = []
+                        for i, rep_idx in rep_by_i.items():
+                            rep_len = sessions[rep_idx]["length"]
+                            for (od, st, r) in session_options[rep_idx]:
+                                if od != d:
+                                    continue
+                                if st <= p < st + rep_len:
+                                    cohort_vars.append(x[(rep_idx, od, st, r)])
+                        if not cohort_vars:
+                            continue
+                        sec_vars = group_occ.get((sec_key, d, p), [])
+                        if sec_vars:
+                            model.Add(sum(sec_vars) + sum(cohort_vars) <= 1)
+                        elif len(cohort_vars) > 1:
+                            # No normal class here, but keep internal guard
+                            # (already added above; skip duplicate).
+                            pass
+                        for lab_key, pid in lab_parent.items():
+                            if pid != sec_id:
+                                continue
+                            lab_vars = group_occ.get((lab_key, d, p), [])
+                            if lab_vars:
+                                model.Add(sum(lab_vars) + sum(cohort_vars) <= 1)
 
     # ---- Faculty consecutive-teaching / break constraint ----
     # H12 (logical counterpart: schedule_rules.check_faculty_consecutive; the
@@ -503,11 +796,33 @@ def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
     # candidate booleans of (overlap-period count * boolean) <= 2.
     # Practical sessions contribute 0 and are excluded; each placement
     # boolean appears once per window with its period-weighted coefficient.
+    # Phase 6F: specialization theory contributes ONCE per section per
+    # period (representative indicator, never multiply-counted); practicals
+    # contribute 0. Breaks/free periods reset via windows (same as normal).
     theory_by_section = {}
     for s_idx, sess in enumerate(sessions):
         if sess["session_type"] != "theory":
             continue
+        if is_spec_idx[s_idx]:
+            continue  # spec theory handled via representative below
         theory_by_section.setdefault(sess["group_key"], []).append(s_idx)
+    # Representative spec-theory sessions per cohort/index (for HN1 terms).
+    spec_theory_rep = {}  # (enrollment, section_id) -> [(rep_idx, length)]
+    if cohort_order:
+        for enr, order in cohort_order.items():
+            sids_sorted = sorted(order[0].keys(), key=str) if order else []
+            if not sids_sorted:
+                continue
+            sections_in_cohort = [sec for sec, e in spec_section_union.items()
+                                  if e == enr]
+            for i, per_spec in order.items():
+                rep_idx = per_spec[sids_sorted[0]]
+                if sessions[rep_idx]["session_type"] != "theory":
+                    continue
+                rep_len = sessions[rep_idx]["length"]
+                for sec_id in sections_in_cohort:
+                    spec_theory_rep.setdefault((enr, sec_id), []).append(
+                        (rep_idx, rep_len))
     for sec_key in sorted(theory_by_section, key=str):
         for d in days:
             for window in hn1_windows(num_periods, break_after):
@@ -520,6 +835,24 @@ def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
                         coeff = overlap_count(start, length, window)
                         if coeff:
                             terms.append(coeff * x[(s_idx, od, start, r)])
+                # Phase 6F: add the cohort's spec-theory footprint once.
+                if sec_key.startswith("section:"):
+                    try:
+                        _sid = int(sec_key.split(":", 1)[1])
+                    except (ValueError, IndexError):
+                        _sid = None
+                    if _sid is not None:
+                        _enr = spec_section_union.get(_sid)
+                        if _enr is not None:
+                            for (rep_idx, rep_len) in spec_theory_rep.get(
+                                    (_enr, _sid), []):
+                                for (od, start, r) in session_options[rep_idx]:
+                                    if od != d:
+                                        continue
+                                    coeff = overlap_count(start, rep_len, window)
+                                    if coeff:
+                                        terms.append(
+                                            coeff * x[(rep_idx, od, start, r)])
                 # Phase 6E: locked theory periods in this window count as
                 # constants (pre-solve occupancy, never moved).
                 locked_n = sum(
@@ -534,6 +867,36 @@ def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
                     return _locked_infeasible(
                         f"locked theory blocks violate MAX_TWO_THEORY "
                         f"({sec_key} on {d}, periods {list(window)}).")
+    # Sections whose only theory is specialization theory (no normal theory
+    # entry above) still need HN1 windows over spec + locked occupancy.
+    if spec_theory_rep:
+        covered_secs = {k for k in theory_by_section}
+        for (enr, sec_id), reps in sorted(spec_theory_rep.items()):
+            sec_key = f"section:{sec_id}"
+            if sec_key in covered_secs:
+                continue  # already constrained above (normal + spec)
+            for d in days:
+                for window in hn1_windows(num_periods, break_after):
+                    terms = []
+                    for (rep_idx, rep_len) in reps:
+                        for (od, start, r) in session_options[rep_idx]:
+                            if od != d:
+                                continue
+                            coeff = overlap_count(start, rep_len, window)
+                            if coeff:
+                                terms.append(coeff * x[(rep_idx, od, start, r)])
+                    locked_n = sum(
+                        1 for p in window
+                        if (sec_key, d, p) in locked_theory) if locked_placements else 0
+                    if terms:
+                        if locked_n:
+                            model.Add(sum(terms) + locked_n <= 2)
+                        else:
+                            model.Add(sum(terms) <= 2)
+                    elif locked_n > 2:
+                        return _locked_infeasible(
+                            f"locked theory blocks violate MAX_TWO_THEORY "
+                            f"({sec_key} on {d}, periods {list(window)}).")
 
     # ---- Soft objective: minimize start periods (compact + early-finish) ----
     objective_terms = []

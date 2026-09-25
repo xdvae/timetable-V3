@@ -110,17 +110,29 @@ def describe_assignment(a, section=None, lab_group=None):
 
 def _snapshot_from_orm(days, num_periods, break_after, max_consecutive,
                        rooms, faculty_rows, sections, lab_groups,
-                       assignments, scheduled_classes):
+                       assignments, scheduled_classes,
+                       specializations=None, memberships=None):
     """Build a schedule_validator snapshot from ORM rows.
 
     TeachingAssignment ORM rows lack the resolved ``*_name/``*_size``
     helpers build_snapshot wants for practicals, so wrap them with the
     resolved values first (theory falls back to the sections list anyway).
+    Phase 6F: specialization assignments (specialization_id set) pass
+    through untouched so the validator can apply conservative
+    section-occupancy; specializations/memberships build the deduped
+    footprint.
     """
     sec_by_id = {s.id: s for s in sections}
     lg_by_id = {lg.id: lg for lg in lab_groups}
     wrapped = []
     for a in assignments:
+        if getattr(a, "specialization_id", None) is not None:
+            wrapped.append(SimpleNamespace(
+                id=a.id, faculty_id=getattr(a, "faculty_id", None),
+                session_type=getattr(a, "session_type", "theory"),
+                section_id=None, lab_group_id=None,
+                specialization_id=getattr(a, "specialization_id", None)))
+            continue
         stype = getattr(a, "session_type", "theory")
         if stype == "practical" and getattr(a, "lab_group_id", None):
             lg = lg_by_id.get(a.lab_group_id) or getattr(a, "lab_group", None)
@@ -144,7 +156,9 @@ def _snapshot_from_orm(days, num_periods, break_after, max_consecutive,
                               else (getattr(a, "section_size", 0) or 0))))
     return sv.build_snapshot(days, num_periods, break_after, max_consecutive,
                              rooms, faculty_rows, lab_groups, sections,
-                             wrapped, scheduled_classes)
+                             wrapped, scheduled_classes,
+                             specializations=specializations,
+                             memberships=memberships)
 
 
 def _find_conflicting_class(snap, *, room_id, faculty_id, group_key,
@@ -398,6 +412,20 @@ def create_locked_block(db, *, assignment_id, day, start_period, length,
             [_fail("UNKNOWN_ASSIGNMENT",
                    f"Teaching assignment {assignment_id} does not exist.",
                    {"assignment_id": assignment_id})])
+    # Phase 6F: interdepartment locks pin normal section/lab teaching.
+    # Specialization assignments are scheduled as synchronized cohorts and
+    # cannot be pinned as single locked blocks in this phase.
+    if getattr(assignment, "specialization_id", None) is not None:
+        raise LockedBlockError(
+            f"Teaching assignment {assignment_id} is a specialization "
+            f"assignment and cannot be locked as an interdepartment block.",
+            [_fail("SPECIALIZATION_OVERLAP",
+                   f"Teaching assignment {assignment_id} is a specialization "
+                   f"assignment and cannot be locked as an interdepartment "
+                   f"block.",
+                   {"assignment_id": assignment_id,
+                    "specialization_id": getattr(
+                        assignment, "specialization_id", None)})])
     room = Room.query.get(room_id) if room_id is not None else None
     if room is None and room_id is not None:
         raise LockedBlockError(
@@ -456,10 +484,20 @@ def create_locked_block(db, *, assignment_id, day, start_period, length,
     lab_groups = LabGroup.query.all()
     assignments = TeachingAssignment.query.all()
     scheduled = ScheduledClass.query.all()
+    # Phase 6F: include specialization occupancy so locked blocks cannot
+    # collide with synchronized specialization slots (read-only here).
+    try:
+        from backend.models import (Specialization as _Spec,
+                                    SpecializationMembership as _Mem)
+        _specs = _Spec.query.all()
+        _mems = _Mem.query.all()
+    except Exception:
+        _specs, _mems = [], []
     snap = _snapshot_from_orm(days, num_periods, break_after,
                               cfg.max_consecutive_teaching,
                               rooms, faculty_rows, sections, lab_groups,
-                              assignments, scheduled)
+                              assignments, scheduled,
+                              specializations=_specs, memberships=_mems)
     # Demand already consumed by existing locked blocks for this assignment.
     from backend.models import LockedBlock as LB
     existing_locked = sum(
