@@ -577,11 +577,11 @@ def reassign_faculty(db, assignment_id, new_faculty_id):
     except FacultyReassignmentError:
         db.session.rollback()
         raise
-    except Exception as exc:  # noqa: BLE001 — rollback must cover any DB error
+    except Exception:  # noqa: BLE001 — rollback must cover any DB error
         db.session.rollback()
         raise FacultyReassignmentError(
-            f"Could not reassign assignment {assignment_id}: {exc}",
+            f"Could not reassign assignment {assignment_id}.",
             [_fail("REASSIGNMENT_INVALID",
-                   f"Could not reassign assignment {assignment_id}: {exc}",
+                   f"Could not reassign assignment {assignment_id}.",
                    {"assignment_id": assignment_id,
                     "faculty_id": new_faculty_id})])

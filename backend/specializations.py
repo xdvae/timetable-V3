@@ -399,9 +399,9 @@ def create_specialization(db, *, name, enrollment_id, session_type="theory",
                        f"enrollment {enrollment_id}.",
                        {"name": name, "enrollment_id": enrollment_id})])
         raise SpecializationError(
-            f"Could not persist specialization: {exc}",
+            "Could not persist specialization.",
             [_fail("PERSISTENCE_FAILED",
-                   f"Could not persist specialization: {exc}", {})])
+                   "Could not persist specialization.", {})])
 
 
 def delete_specialization(db, specialization_id):
@@ -439,12 +439,12 @@ def delete_specialization(db, specialization_id):
         db.session.delete(spec)
         db.session.commit()
         return True
-    except Exception as exc:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         db.session.rollback()
         raise SpecializationError(
-            f"Could not delete specialization: {exc}",
+            "Could not delete specialization.",
             [_fail("PERSISTENCE_FAILED",
-                   f"Could not delete specialization: {exc}",
+                   "Could not delete specialization.",
                    {"specialization_id": specialization_id})])
 
 
@@ -520,12 +520,12 @@ def add_or_update_membership(db, specialization_id, section_id,
         row = SpecializationMembership.query.filter_by(
             specialization_id=spec.id, section_id=section.id).first()
         return row
-    except Exception as exc:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         db.session.rollback()
         raise SpecializationError(
-            f"Could not persist membership: {exc}",
+            "Could not persist membership.",
             [_fail("PERSISTENCE_FAILED",
-                   f"Could not persist membership: {exc}",
+                   "Could not persist membership.",
                    {"specialization_id": specialization_id,
                     "section_id": section_id})])
 
@@ -549,12 +549,12 @@ def delete_membership(db, specialization_id, section_id):
         db.session.delete(row)
         db.session.commit()
         return True
-    except Exception as exc:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         db.session.rollback()
         raise SpecializationError(
-            f"Could not delete membership: {exc}",
+            "Could not delete membership.",
             [_fail("PERSISTENCE_FAILED",
-                   f"Could not delete membership: {exc}", {})])
+                   "Could not delete membership.", {})])
 
 
 def query_spec_info(db=None):

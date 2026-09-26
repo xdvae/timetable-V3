@@ -3,6 +3,7 @@ import { Inbox, TriangleAlert } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert.jsx";
 import { Button } from "@/components/ui/button.jsx";
 import { Skeleton } from "@/components/ui/skeleton.jsx";
+import { normalizeFailure } from "@/lib/failures.js";
 
 /** Loading placeholder for API-backed pages: skeletons, never an empty table. */
 export function PageLoading({ rows = 5, label = "Loading…" }) {
@@ -19,11 +20,14 @@ export function PageLoading({ rows = 5, label = "Loading…" }) {
 
 /** Human-readable API failure with a retry action. */
 export function QueryError({ error, onRetry }) {
-  const status = error?.status;
+  // Phase 6Q: message always comes from the shared normalizer (never
+  // undefined/null/[object Object]); hints stay status-aware so network
+  // failures remain distinguishable from server validation.
+  const normalized = normalizeFailure(error);
   const hint =
-    status === 401
+    normalized.category === "auth"
       ? "Your session may have expired. Reload the page to sign in again."
-      : status === 0
+      : normalized.category === "network"
         ? "The server could not be reached."
         : null;
   return (
@@ -31,7 +35,7 @@ export function QueryError({ error, onRetry }) {
       <TriangleAlert aria-hidden="true" />
       <AlertTitle>Couldn&apos;t load this page</AlertTitle>
       <AlertDescription>
-        <p>{error?.message || "Something went wrong while loading data."}</p>
+        <p>{normalized.message}</p>
         {hint ? <p className="mt-1">{hint}</p> : null}
         {onRetry ? (
           <Button variant="outline" size="sm" onClick={onRetry} className="mt-3">

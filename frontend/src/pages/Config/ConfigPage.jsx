@@ -5,7 +5,7 @@ import { PageLoading, QueryError } from "@/components/feedback/data-states.jsx";
 import { Button } from "@/components/ui/button.jsx";
 import { Input } from "@/components/ui/input.jsx";
 import { Label } from "@/components/ui/label.jsx";
-import { FieldError, MutationError } from "@/components/feedback/mutation.jsx";
+import { FieldError, MutationFailure } from "@/components/feedback/mutation.jsx";
 import { useApi } from "@/hooks/use-api.js";
 import { useMutation } from "@/hooks/use-mutation.js";
 import { useToast } from "@/hooks/use-toast.js";
@@ -66,7 +66,7 @@ function ConfigForm({ initial, onSaved }) {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
-      <MutationError error={error && !error.fieldErrors ? error : null} />
+      <MutationFailure error={error} />
       <Panel accent="steel" title="Session / General">
         <ConfigField id="session_name" label="Session name" error={fieldErrors.session_name}>
           <Input

@@ -22,7 +22,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table.jsx";
-import { DeleteConfirmDialog, FieldError, MutationError } from "@/components/feedback/mutation.jsx";
+import { DeleteConfirmDialog, FieldError, MutationFailure } from "@/components/feedback/mutation.jsx";
 import { useApi } from "@/hooks/use-api.js";
 import { useMutation } from "@/hooks/use-mutation.js";
 import { useToast } from "@/hooks/use-toast.js";
@@ -56,7 +56,7 @@ function AddProgramDialog({ open, onOpenChange, onCreated }) {
           <DialogDescription>Degree programs, e.g. BCA, B.Tech CSE.</DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <MutationError error={error && !error.fieldErrors ? error : null} />
+          <MutationFailure error={error} />
           <div>
             <Label htmlFor="program-name">Name</Label>
             <Input

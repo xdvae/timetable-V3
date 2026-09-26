@@ -32,11 +32,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table.jsx";
-import { DeleteConfirmDialog, FailureList, FieldError, MutationError } from "@/components/feedback/mutation.jsx";
+import { DeleteConfirmDialog, FieldError, MutationError, MutationFailure } from "@/components/feedback/mutation.jsx";
 import { useApi } from "@/hooks/use-api.js";
 import { useMutation } from "@/hooks/use-mutation.js";
 import { useToast } from "@/hooks/use-toast.js";
-import { getFailures } from "@/lib/failures.js";
 import { emitOnSuccess, FACULTY_DOMAINS, PREFERENCE_DOMAINS } from "@/lib/propagation.js";
 import {
   createFaculty,
@@ -121,7 +120,7 @@ function AddFacultyDialog({ open, onOpenChange, onCreated }) {
           <DialogDescription>Roster entry with type and weekly hour limit.</DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <MutationError error={error && !error.fieldErrors ? error : null} />
+          <MutationFailure error={error} />
           <div>
             <Label htmlFor="faculty-name">Name</Label>
             <Input
@@ -666,7 +665,6 @@ function AddPreferenceDialog({ open, onOpenChange, facultyId, allDays, periods, 
     createFacultyPreference(facultyId, payload)
   );
   const draft = usePreferenceDraft(null);
-  const failures = getFailures(error);
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -694,11 +692,7 @@ function AddPreferenceDialog({ open, onOpenChange, facultyId, allDays, periods, 
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
-          {failures.length > 0 ? (
-            <FailureList failures={failures} />
-          ) : (
-            <MutationError error={error && !error.fieldErrors ? error : null} />
-          )}
+          <MutationFailure error={error} />
           <PreferenceFormFields
             idPrefix="pref-add"
             kind={draft.kind}
@@ -738,7 +732,6 @@ function EditPreferenceDialog({ preference, onOpenChange, allDays, periods, onSa
     updateFacultyPreference(preference.id, payload)
   );
   const draft = usePreferenceDraft(preference);
-  const failures = getFailures(error);
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -765,11 +758,7 @@ function EditPreferenceDialog({ preference, onOpenChange, allDays, periods, onSa
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
-          {failures.length > 0 ? (
-            <FailureList failures={failures} />
-          ) : (
-            <MutationError error={error && !error.fieldErrors ? error : null} />
-          )}
+          <MutationFailure error={error} />
           <PreferenceFormFields
             idPrefix={`pref-edit-${preference.id}`}
             kind={draft.kind}

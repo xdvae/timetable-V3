@@ -23,6 +23,7 @@ from backend.scheduler import run_scheduler
 from backend import export as exp
 from backend import csv_import
 from backend.validators import normalize_room_name, RoomNameError
+from backend import errors as error_contract
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
 
@@ -52,31 +53,68 @@ class ApiError(Exception):
 
 @api_bp.errorhandler(ApiError)
 def _handle_api_error(err):
-    payload = {"error": err.message}
-    if err.field_errors:
-        payload["field_errors"] = err.field_errors
-    if getattr(err, "code", None):
-        payload["code"] = err.code
-    if getattr(err, "details", None) is not None:
-        payload["details"] = err.details
-    if getattr(err, "failures", None):
-        payload["failures"] = err.failures
-    return jsonify(payload), err.status
+    # Phase 6Q: every structured error goes through the unified contract
+    # (backend/errors.py). The flat keys stay byte-identical for pre-6Q
+    # clients; the contract only adds the "ok": false marker and
+    # guarantees a stable code plus sanitized message/details.
+    return error_contract.error_response(
+        code=err.code, message=err.message, status=err.status,
+        details=err.details, field_errors=err.field_errors,
+        failures=err.failures)
 
 
 @api_bp.errorhandler(404)
 def _handle_404(err):
-    return jsonify({"error": "Not found."}), 404
+    return error_contract.error_response(
+        code=error_contract.NOT_FOUND, message="Not found.", status=404)
 
 
 @api_bp.errorhandler(405)
 def _handle_405(err):
-    return jsonify({"error": "Method not allowed."}), 405
+    return error_contract.error_response(
+        code=error_contract.METHOD_NOT_ALLOWED,
+        message="Method not allowed.", status=405)
 
 
 @api_bp.errorhandler(400)
 def _handle_400(err):
-    return jsonify({"error": "Bad request."}), 400
+    return error_contract.error_response(
+        code=error_contract.BAD_REQUEST, message="Bad request.", status=400)
+
+
+@api_bp.errorhandler(Exception)
+def _handle_unexpected(err):
+    # Phase 6Q internal-exception safety: unknown exceptions inside /api/*
+    # views must never leak tracebacks, SQL/SQLite text, filesystem paths,
+    # or secrets. ApiError/404/405/400 keep their specific handlers above
+    # (Flask prefers the most specific handler); HTTPExceptions keep their
+    # status with a generic message; everything else is a sanitized 500.
+    # No request payload or exception text is logged or returned.
+    from werkzeug.exceptions import HTTPException
+    if isinstance(err, HTTPException):
+        status = err.code or 500
+        if status == 404:
+            return error_contract.error_response(
+                code=error_contract.NOT_FOUND,
+                message="Not found.", status=404)
+        if status == 405:
+            return error_contract.error_response(
+                code=error_contract.METHOD_NOT_ALLOWED,
+                message="Method not allowed.", status=405)
+        if status == 400:
+            return error_contract.error_response(
+                code=error_contract.BAD_REQUEST,
+                message="Bad request.", status=400)
+        if status == 401:
+            return error_contract.error_response(
+                code=error_contract.AUTH_REQUIRED,
+                message="Authentication required.", status=401)
+        return error_contract.error_response(
+            code=error_contract.INTERNAL_ERROR,
+            message=error_contract.INTERNAL_ERROR_MESSAGE, status=status)
+    return error_contract.error_response(
+        code=error_contract.INTERNAL_ERROR,
+        message=error_contract.INTERNAL_ERROR_MESSAGE, status=500)
 
 
 def _data():
@@ -235,7 +273,11 @@ def api_login():
         # Flask dashboard URL and the React dashboard route.
         return jsonify({"ok": True, "username": user.username,
                         "redirect": next_page or "/"})
-    return jsonify({"error": "Incorrect username or password."}), 401
+    # Phase 6Q: machine-readable code so the frontend can distinguish
+    # bad credentials from other 401s (message unchanged).
+    return error_contract.error_response(
+        code=error_contract.INVALID_CREDENTIALS,
+        message="Incorrect username or password.", status=401)
 
 
 @api_bp.route("/logout", methods=["POST"])
@@ -421,7 +463,10 @@ def api_section_preferred_room(sid):
         db.session.refresh(s)
     except Exception as exc:  # noqa: BLE001 — rollback must cover any DB error
         db.session.rollback()
-        raise ApiError(f"Could not save preferred room: {exc}", 422)
+        # Phase 6Q: raw DB exception text must never reach the client
+        # (it can contain SQL/constraint fragments); the atomic rollback
+        # guarantee is unchanged.
+        raise ApiError("Could not save preferred room.", 422)
     if room_id is None:
         message = f"Preferred room cleared for section '{s.name}'."
     else:
@@ -1371,7 +1416,9 @@ def api_schedule_run():
                 failures=[{"code": "SCHEDULING_INFEASIBLE",
                            "message": message or "",
                            "details": {"locked_block_ids": locked_ids}}])
-        raise ApiError(f"Scheduling failed: {message}", 422)
+        raise ApiError(f"Scheduling failed: {message}", 422,
+                         code=error_contract.SCHEDULING_FAILED,
+                         details={"reason": message or "no sessions"})
 
     # SUCCESS: atomically replace non-locked rows; locked rows stay exactly
     # where they are (same day/start/length/room/faculty).
@@ -1877,7 +1924,9 @@ def init_api(app, login_manager):
         # these: no route matched, so no blueprint is active). Every other
         # 404 keeps Werkzeug's default HTML page, exactly as today.
         if (request.path or "").startswith("/api/"):
-            return jsonify({"error": "Not found."}), 404
+            return error_contract.error_response(
+                code=error_contract.NOT_FOUND,
+                message="Not found.", status=404)
         return NotFound()
 
     @login_manager.unauthorized_handler
@@ -1887,7 +1936,9 @@ def init_api(app, login_manager):
         # login_view is configured since React owns the /login page)
         # by temporarily restoring the default handler for one call.
         if (request.blueprint == api_bp.name) or (request.path or "").startswith("/api/"):
-            return jsonify({"error": "Authentication required."}), 401
+            return error_contract.error_response(
+                code=error_contract.AUTH_REQUIRED,
+                message="Authentication required.", status=401)
         previous = login_manager.unauthorized_callback
         login_manager.unauthorized_callback = None
         try:

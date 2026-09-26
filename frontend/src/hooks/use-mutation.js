@@ -1,10 +1,13 @@
 import { useCallback, useState } from "react";
 
+import { normalizeFieldErrors } from "@/lib/failures.js";
+
 /**
  * Shared mutation runner for thin Flask-mutation clients.
  * The backend stays authoritative: this only tracks submitting state and
  * surfaces the backend's own error envelope ({ error, field_errors }).
- * Returns { execute, isSubmitting, error, fieldErrors, reset }.
+ * Field errors are normalized so every consumer sees { field: message }
+ * of safe strings. Returns { execute, isSubmitting, error, fieldErrors, reset }.
  */
 export function useMutation(mutateFn) {
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -28,7 +31,7 @@ export function useMutation(mutateFn) {
       } catch (err) {
         setIsSubmitting(false);
         setError(err);
-        setFieldErrors(err?.fieldErrors ?? {});
+        setFieldErrors(normalizeFieldErrors(err?.fieldErrors));
         return { ok: false, error: err };
       }
     },

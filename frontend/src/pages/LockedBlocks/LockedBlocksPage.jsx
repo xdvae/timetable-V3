@@ -31,7 +31,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table.jsx";
-import { DeleteConfirmDialog, FailureList, FieldError, MutationError } from "@/components/feedback/mutation.jsx";
+import { DeleteConfirmDialog, FailureList, FieldError, MutationFailure } from "@/components/feedback/mutation.jsx";
 import { getFailures } from "@/lib/failures.js";
 import { emitOnSuccess, LOCKED_BLOCK_DOMAINS } from "@/lib/propagation.js";
 import { useApi } from "@/hooks/use-api.js";
@@ -122,8 +122,6 @@ function CreateLockedBlockDialog({ open, onOpenChange, onCreated, options }) {
   const [roomId, setRoomId] = useState(rooms[0] != null ? String(rooms[0].id) : "");
   const [department, setDepartment] = useState("");
   const [note, setNote] = useState("");
-  const failures = getFailures(error);
-
   const selected = assignments.find((a) => String(a.id) === assignmentId) ?? null;
   const missing = [];
   if (assignments.length === 0) missing.push("teaching assignments");
@@ -175,11 +173,7 @@ function CreateLockedBlockDialog({ open, onOpenChange, onCreated, options }) {
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
-          {failures.length > 0 ? (
-            <FailureList failures={failures} />
-          ) : (
-            <MutationError error={error && !error.fieldErrors ? error : null} />
-          )}
+          <MutationFailure error={error} />
           {missing.length > 0 ? (
             <p className="text-sm font-medium text-signal" role="alert">
               Add {missing.join(", ")} first before creating a fixed block.

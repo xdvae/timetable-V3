@@ -30,7 +30,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table.jsx";
-import { DeleteConfirmDialog, FailureList, FieldError, LoadWarning, MutationError } from "@/components/feedback/mutation.jsx";
+import { DeleteConfirmDialog, FailureList, FieldError, LoadWarning, MutationError, MutationFailure } from "@/components/feedback/mutation.jsx";
 import { getFailures } from "@/lib/failures.js";
 import { ASSIGNMENT_WRITE_DOMAINS, emitOnSuccess, REASSIGN_DOMAINS, SWAP_DOMAINS } from "@/lib/propagation.js";
 import { useApi } from "@/hooks/use-api.js";
@@ -133,7 +133,7 @@ function AddAssignmentDialog({ open, onOpenChange, onCreated, options }) {
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <MutationError error={error && !error.fieldErrors ? error : null} />
+          <MutationFailure error={error} />
           {missing.length > 0 ? (
             <p className="text-sm font-medium text-signal" role="alert">
               Add {missing.join(", ")} first before creating an assignment.
@@ -298,8 +298,6 @@ function ReassignFacultyDialog({ open, onOpenChange, onApplied, assignment, facu
     reassignFaculty(assignmentId, facultyId)
   );
   const busy = validate.isSubmitting || apply.isSubmitting;
-  const failures = getFailures(validate.error);
-  const applyFailures = getFailures(apply.error);
   const target = (faculty ?? []).find((member) => String(member.id) === targetId);
 
   function handleTargetChange(nextId) {
@@ -360,11 +358,7 @@ function ReassignFacultyDialog({ open, onOpenChange, onApplied, assignment, facu
         </DialogHeader>
         {phase === "select" ? (
           <form onSubmit={handleValidate} className="space-y-4">
-            {failures.length > 0 ? (
-              <FailureList failures={failures} />
-            ) : (
-              <MutationError error={validate.error} />
-            )}
+            <MutationFailure error={validate.error} />
             {options.length === 0 ? (
               <p className="text-sm font-medium text-signal" role="alert">
                 No other faculty available for reassignment.
@@ -413,11 +407,7 @@ function ReassignFacultyDialog({ open, onOpenChange, onApplied, assignment, facu
           </div>
         ) : (
           <div className="space-y-4">
-            {applyFailures.length > 0 ? (
-              <FailureList failures={applyFailures} />
-            ) : (
-              <MutationError error={apply.error} />
-            )}
+            <MutationFailure error={apply.error} />
             <div className="rounded-lg border px-4 py-3 text-sm">
               <p className="font-medium text-ink">{assignmentLabel(assignment)}</p>
               <p className="mt-1 text-muted-foreground">Current: {assignment.faculty_name}</p>

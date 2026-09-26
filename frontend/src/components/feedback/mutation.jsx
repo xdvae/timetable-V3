@@ -10,14 +10,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog.jsx";
-import { FAILURE_LABELS, failureContext } from "@/lib/failures.js";
+import { failureContext, getFailures, hasFieldErrors, labelFor, normalizeFailure, safeMessage } from "@/lib/failures.js";
 
 /** Field-level backend validation message, wired for aria-describedby. */
 export function FieldError({ id, message }) {
-  if (!message) return null;
+  const text = safeMessage(message, "");
+  if (!text) return null;
   return (
     <p id={id} role="alert" className="mt-1 text-xs font-medium text-signal">
-      {message}
+      {text}
     </p>
   );
 }
@@ -25,11 +26,14 @@ export function FieldError({ id, message }) {
 /** General (non-field) mutation failure. Unknown backend fields land here too. */
 export function MutationError({ error }) {
   if (!error) return null;
+  // Phase 6Q: every failure renders through the shared normalizer, so an
+  // object/array message can never surface as "[object Object]".
+  const normalized = normalizeFailure(error);
   return (
     <Alert variant="destructive">
       <TriangleAlert aria-hidden="true" />
       <AlertTitle>Something went wrong</AlertTitle>
-      <AlertDescription>{error.message || "The operation could not be completed."}</AlertDescription>
+      <AlertDescription>{normalized.message}</AlertDescription>
     </Alert>
   );
 }
@@ -38,6 +42,7 @@ export function MutationError({ error }) {
  * Compact list of structured backend validation failures. Shows the
  * backend message verbatim with a code-derived label; technical context
  * (day/period/class IDs) stays secondary. Only fields that exist are shown.
+ * Plain-string entries (e.g. CSV row problems) render verbatim.
  */
 export function FailureList({ failures, title }) {
   if (!failures || failures.length === 0) return null;
@@ -48,11 +53,19 @@ export function FailureList({ failures, title }) {
       <AlertDescription>
         <ul className="grid gap-2">
           {failures.map((failure, index) => {
-            const context = failureContext(failure.details);
+            if (typeof failure === "string") {
+              return (
+                <li key={index}>
+                  <p>{safeMessage(failure)}</p>
+                </li>
+              );
+            }
+            const context = failureContext(failure?.details);
+            const message = safeMessage(failure?.message, "");
             return (
               <li key={index}>
-                <p className="font-medium">{FAILURE_LABELS[failure.code] ?? "Validation failed"}</p>
-                {failure.message ? <p>{failure.message}</p> : null}
+                <p className="font-medium">{labelFor(failure?.code)}</p>
+                {message ? <p>{message}</p> : null}
                 {context ? <p className="text-xs opacity-80">{context}</p> : null}
               </li>
             );
@@ -61,6 +74,21 @@ export function FailureList({ failures, title }) {
       </AlertDescription>
     </Alert>
   );
+}
+
+/**
+ * Phase 6Q shared mutation-failure block: structured failures render as a
+ * list, everything else as a single error. Suppresses the generic box
+ * when field errors exist (those render inline beside their inputs).
+ * Replaces the page-specific `getFailures ? FailureList : MutationError`
+ * branching duplicated across pages.
+ */
+export function MutationFailure({ error, title }) {
+  if (!error) return null;
+  const failures = getFailures(error);
+  if (failures.length > 0) return <FailureList failures={failures} title={title} />;
+  if (hasFieldErrors(error)) return null;
+  return <MutationError error={error} />;
 }
 
 /** Soft weekly-load notice (never a blocker). Rendered when exceeded. */
@@ -101,7 +129,7 @@ export function DeleteConfirmDialog({
           <Alert variant="destructive">
             <TriangleAlert aria-hidden="true" />
             <AlertTitle>Delete failed</AlertTitle>
-            <AlertDescription>{error.message || "The record could not be deleted."}</AlertDescription>
+            <AlertDescription>{safeMessage(error.message)}</AlertDescription>
           </Alert>
         ) : null}
         <DialogFooter>

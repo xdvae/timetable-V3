@@ -471,13 +471,13 @@ def swap_faculty(db, assignment_a_id, assignment_b_id):
     except FacultySwapError:
         db.session.rollback()
         raise
-    except Exception as exc:  # noqa: BLE001 — rollback must cover any DB error
+    except Exception:  # noqa: BLE001 — rollback must cover any DB error
         db.session.rollback()
         raise FacultySwapError(
             f"Could not swap assignments {assignment_a_id} and "
-            f"{assignment_b_id}: {exc}",
+            f"{assignment_b_id}.",
             [_fail("INVALID_SWAP",
                    f"Could not swap assignments {assignment_a_id} and "
-                   f"{assignment_b_id}: {exc}",
+                   f"{assignment_b_id}.",
                    {"assignment_a_id": assignment_a_id,
                     "assignment_b_id": assignment_b_id})])

@@ -454,12 +454,12 @@ def create_preference(db, faculty_id, data):
     except PreferenceError:
         db.session.rollback()
         raise
-    except Exception as exc:  # noqa: BLE001 — rollback must cover any DB error
+    except Exception:  # noqa: BLE001 — rollback must cover any DB error
         db.session.rollback()
         raise PreferenceError(
-            f"Could not save preference: {exc}",
+            "Could not save preference.",
             [_fail("PREFERENCE_INVALID",
-                   f"Could not save preference: {exc}",
+                   "Could not save preference.",
                    {"faculty_id": fid})])
     return row
 
@@ -512,12 +512,12 @@ def update_preference(db, preference_id, data):
     except PreferenceError:
         db.session.rollback()
         raise
-    except Exception as exc:  # noqa: BLE001 — rollback must cover any DB error
+    except Exception:  # noqa: BLE001 — rollback must cover any DB error
         db.session.rollback()
         raise PreferenceError(
-            f"Could not save preference: {exc}",
+            "Could not save preference.",
             [_fail("PREFERENCE_INVALID",
-                   f"Could not save preference: {exc}",
+                   "Could not save preference.",
                    {"preference_id": pid})])
     return row
 
@@ -543,12 +543,12 @@ def delete_preference(db, preference_id):
     try:
         db.session.delete(row)
         db.session.commit()
-    except Exception as exc:  # noqa: BLE001 — rollback must cover any DB error
+    except Exception:  # noqa: BLE001 — rollback must cover any DB error
         db.session.rollback()
         raise PreferenceError(
-            f"Could not delete preference: {exc}",
+            "Could not delete preference.",
             [_fail("PREFERENCE_INVALID",
-                   f"Could not delete preference: {exc}",
+                   "Could not delete preference.",
                    {"preference_id": pid})])
     return pid
 

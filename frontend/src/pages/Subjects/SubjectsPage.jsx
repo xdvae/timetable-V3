@@ -29,7 +29,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table.jsx";
-import { DeleteConfirmDialog, FieldError, MutationError } from "@/components/feedback/mutation.jsx";
+import { DeleteConfirmDialog, FieldError, MutationFailure } from "@/components/feedback/mutation.jsx";
 import { useApi } from "@/hooks/use-api.js";
 import { useMutation } from "@/hooks/use-mutation.js";
 import { useToast } from "@/hooks/use-toast.js";
@@ -85,7 +85,7 @@ function AddSubjectDialog({ open, onOpenChange, onCreated, enrollments }) {
           <DialogDescription>Subject catalog entry with default weekly hours.</DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <MutationError error={error && !error.fieldErrors ? error : null} />
+          <MutationFailure error={error} />
           <div>
             <Label htmlFor="subject-enrollment">Enrollment (program + year)</Label>
             <Select value={enrollmentId} onValueChange={setEnrollmentId} disabled={isSubmitting}>

@@ -15,6 +15,7 @@ import {
 
 import { Page, Panel } from "@/components/layout/page.jsx";
 import { EmptyState, PageLoading, QueryError } from "@/components/feedback/data-states.jsx";
+import { FailureList } from "@/components/feedback/mutation.jsx";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert.jsx";
 import { Button } from "@/components/ui/button.jsx";
 import {
@@ -28,6 +29,7 @@ import {
 import { useApi } from "@/hooks/use-api.js";
 import { useMutation } from "@/hooks/use-mutation.js";
 import { useToast } from "@/hooks/use-toast.js";
+import { getFailures, safeMessage } from "@/lib/failures.js";
 import { emitOnSuccess, GENERATION_DOMAINS } from "@/lib/propagation.js";
 import { exportUrl, getTimetableHome, getTimetableView, runScheduler } from "@/services/api/timetable.js";
 import { TimetableGrid } from "@/components/timetable/TimetableGrid.jsx";
@@ -68,10 +70,12 @@ function GeneratePanel({ onGenerated }) {
       emitOnSuccess(res, GENERATION_DOMAINS);
     } else if (res.error) {
       // Backend message preserved verbatim (e.g. "Scheduling failed: …");
-      // the previous schedule, if any, is left untouched server-side, so a
+      // structured infeasibility/conflict failures (SCHEDULING_INFEASIBLE,
+      // specialization codes) render below with their details intact.
+      // The previous schedule, if any, is left untouched server-side, so a
       // failed generation emits nothing and triggers no refetch.
       setResult({ ok: false, error: res.error });
-      toast.error(res.error.message || "Scheduling failed.", { title: "Scheduling failed" });
+      toast.error(safeMessage(res.error.message, "Scheduling failed."), { title: "Scheduling failed" });
     }
   }
 
@@ -117,9 +121,14 @@ function GeneratePanel({ onGenerated }) {
           <TriangleAlert aria-hidden="true" />
           <AlertTitle>Scheduling failed</AlertTitle>
           <AlertDescription>
-            {result.error.message || "The scheduler could not produce a timetable."}
+            {safeMessage(result.error.message, "The scheduler could not produce a timetable.")}
           </AlertDescription>
         </Alert>
+      ) : null}
+      {result && !result.ok && getFailures(result.error).length > 0 ? (
+        <div className="mt-3">
+          <FailureList failures={getFailures(result.error)} title="Why scheduling failed" />
+        </div>
       ) : null}
 
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>

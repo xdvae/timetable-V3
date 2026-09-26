@@ -30,7 +30,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table.jsx";
-import { DeleteConfirmDialog, FieldError, MutationError } from "@/components/feedback/mutation.jsx";
+import { DeleteConfirmDialog, FieldError, MutationFailure } from "@/components/feedback/mutation.jsx";
 import { useApi } from "@/hooks/use-api.js";
 import { useMutation } from "@/hooks/use-mutation.js";
 import { useToast } from "@/hooks/use-toast.js";
@@ -77,7 +77,7 @@ function AddRoomDialog({ open, onOpenChange, onCreated }) {
           <DialogDescription>Theory rooms and labs with capacity.</DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <MutationError error={error && !error.fieldErrors ? error : null} />
+          <MutationFailure error={error} />
           <div>
             <Label htmlFor="room-name">Room Number</Label>
             <Input

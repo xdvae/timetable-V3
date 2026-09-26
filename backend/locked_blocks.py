@@ -539,12 +539,12 @@ def create_locked_block(db, *, assignment_id, day, start_period, length,
     except LockedBlockError:
         db.session.rollback()
         raise
-    except Exception as exc:  # noqa: BLE001 — rollback must cover any DB error
+    except Exception:  # noqa: BLE001 — rollback must cover any DB error
         db.session.rollback()
         raise LockedBlockError(
-            f"Could not persist locked block: {exc}",
+            "Could not persist locked block.",
             [_fail("PERSISTENCE_FAILED",
-                   f"Could not persist locked block: {exc}", {})])
+                   "Could not persist locked block.", {})])
 
 
 def delete_locked_block(db, locked_block_id):
@@ -566,12 +566,12 @@ def delete_locked_block(db, locked_block_id):
         db.session.delete(lb)
         db.session.commit()
         return True
-    except Exception as exc:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         db.session.rollback()
         raise LockedBlockError(
-            f"Could not delete locked block: {exc}",
+            "Could not delete locked block.",
             [_fail("PERSISTENCE_FAILED",
-                   f"Could not delete locked block: {exc}",
+                   "Could not delete locked block.",
                    {"locked_block_id": locked_block_id})])
 
 

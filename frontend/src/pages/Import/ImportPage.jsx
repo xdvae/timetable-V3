@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button.jsx";
 import { Input } from "@/components/ui/input.jsx";
 import { Label } from "@/components/ui/label.jsx";
 import { useToast } from "@/hooks/use-toast.js";
+import { getImportRowErrors, safeMessage } from "@/lib/failures.js";
 import { emitOnSuccess, IMPORT_WORKLOAD_DOMAINS, ROOMS_DOMAINS } from "@/lib/propagation.js";
 import { importRoomsCsv, importWorkloadCsv } from "@/services/api/import.js";
 
@@ -69,13 +70,16 @@ function ImportCard({ inputId, title, description, columns, upload, successTitle
       if (inputRef.current) inputRef.current.value = "";
     } catch (err) {
       setError(err);
-      toast.error(err?.message || "Import failed.", { title: "Import failed" });
+      toast.error(safeMessage(err?.message, "Import failed."), { title: "Import failed" });
     } finally {
       setIsImporting(false);
     }
   }
 
-  const rowErrors = result?.errors ?? [];
+  // Phase 6Q: row problems arrive as backend strings ("Row i: ...") but are
+  // coerced through the shared normalizer so a malformed entry can never
+  // render as [object Object]; counts/summary semantics are unchanged.
+  const rowErrors = getImportRowErrors(result);
   const hiddenErrorCount = Math.max(0, rowErrors.length - MAX_SHOWN_ERRORS);
 
   return (
@@ -121,7 +125,7 @@ function ImportCard({ inputId, title, description, columns, upload, successTitle
           <CircleCheck aria-hidden="true" />
           <AlertTitle>{successTitle}</AlertTitle>
           <AlertDescription>
-            <p>{result.message}</p>
+            <p>{safeMessage(result.message, "Import finished.")}</p>
             {rowErrors.length > 0 ? (
               <>
                 <p className="mt-2 font-medium">
@@ -129,7 +133,9 @@ function ImportCard({ inputId, title, description, columns, upload, successTitle
                 </p>
                 <ul className="mt-1 list-disc space-y-0.5 pl-5 font-mono text-xs">
                   {rowErrors.slice(0, MAX_SHOWN_ERRORS).map((rowError, index) => (
-                    <li key={`${index}-${rowError}`}>{rowError}</li>
+                    <li key={`${index}-${safeMessage(rowError).slice(0, 80)}`}>
+                      {safeMessage(rowError)}
+                    </li>
                   ))}
                 </ul>
                 {hiddenErrorCount > 0 ? (
@@ -146,8 +152,10 @@ function ImportCard({ inputId, title, description, columns, upload, successTitle
           <CircleAlert aria-hidden="true" />
           <AlertTitle>Import failed</AlertTitle>
           <AlertDescription>
-            <p>{error.message || "Something went wrong while importing."}</p>
-            {error.fieldErrors?.file ? <p className="mt-1">{error.fieldErrors.file}</p> : null}
+            <p>{safeMessage(error.message, "Something went wrong while importing.")}</p>
+            {safeMessage(error.fieldErrors?.file, "") ? (
+              <p className="mt-1">{safeMessage(error.fieldErrors.file)}</p>
+            ) : null}
           </AlertDescription>
         </Alert>
       ) : null}

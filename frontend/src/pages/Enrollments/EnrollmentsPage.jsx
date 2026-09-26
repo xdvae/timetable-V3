@@ -31,8 +31,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table.jsx";
-import { DeleteConfirmDialog, FailureList, FieldError, MutationError } from "@/components/feedback/mutation.jsx";
-import { getFailures } from "@/lib/failures.js";
+import { DeleteConfirmDialog, FieldError, MutationFailure } from "@/components/feedback/mutation.jsx";
 import { emitOnSuccess, ENROLLMENTS_DOMAINS, PREFERRED_ROOM_DOMAINS } from "@/lib/propagation.js";
 import { useApi } from "@/hooks/use-api.js";
 import { useMutation } from "@/hooks/use-mutation.js";
@@ -80,7 +79,7 @@ function AddEnrollmentDialog({ open, onOpenChange, onCreated, programs }) {
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <MutationError error={error && !error.fieldErrors ? error : null} />
+          <MutationFailure error={error} />
           <div>
             <Label htmlFor="enrollment-program">Program</Label>
             <Select value={programId} onValueChange={setProgramId} disabled={isSubmitting}>
@@ -327,7 +326,6 @@ function PreferredRoomControl({ section, rooms, roomsLoading, roomsUnavailable, 
   const current = section.preferred_theory_room_id ?? null;
   const [selected, setSelected] = useState(current == null ? "none" : String(current));
   const [touched, setTouched] = useState(false);
-  const failures = getFailures(error);
   const stale =
     current != null && !(rooms ?? []).some((room) => String(room.id) === String(current));
   // A stale (dangling) preference displays as "No preferred room" with an
@@ -389,11 +387,7 @@ function PreferredRoomControl({ section, rooms, roomsLoading, roomsUnavailable, 
           </SelectContent>
         </Select>
       </div>
-      {failures.length > 0 ? (
-        <FailureList failures={failures} />
-      ) : (
-        <MutationError error={error} />
-      )}
+      <MutationFailure error={error} />
       <p className="text-xs text-muted-foreground">
         Preferred room is a scheduling preference. If it is unavailable or
         incompatible, the scheduler may use another valid room. Applies to future

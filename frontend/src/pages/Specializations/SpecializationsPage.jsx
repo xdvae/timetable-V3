@@ -32,7 +32,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table.jsx";
-import { DeleteConfirmDialog, FailureList, FieldError, MutationError } from "@/components/feedback/mutation.jsx";
+import { DeleteConfirmDialog, FailureList, FieldError, MutationFailure } from "@/components/feedback/mutation.jsx";
 import { getFailures } from "@/lib/failures.js";
 import { emitOnSuccess, MEMBERSHIP_DOMAINS, SPECIALIZATION_DOMAINS } from "@/lib/propagation.js";
 import { useApi } from "@/hooks/use-api.js";
@@ -82,7 +82,6 @@ function CreateSpecializationDialog({ open, onOpenChange, onCreated, enrollmentI
   const [sessionType, setSessionType] = useState("theory");
   const [blockLength, setBlockLength] = useState("1");
   const [periodsPerWeek, setPeriodsPerWeek] = useState("2");
-  const failures = getFailures(error);
 
   const localError =
     name.trim() === ""
@@ -126,11 +125,7 @@ function CreateSpecializationDialog({ open, onOpenChange, onCreated, enrollmentI
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
-          {failures.length > 0 ? (
-            <FailureList failures={failures} />
-          ) : (
-            <MutationError error={error && !error.fieldErrors ? error : null} />
-          )}
+          <MutationFailure error={error} />
           <div>
             <Label htmlFor="spec-name">Name</Label>
             <Input
@@ -228,7 +223,6 @@ function MembershipDialog({ open, onOpenChange, onSaved, specialization, section
   const { execute, isSubmitting, error } = useMutation(({ sectionId: sid, studentCount: count }) =>
     saveMembership(specialization.id, { sectionId: sid, studentCount: count })
   );
-  const failures = getFailures(error);
 
   function handleSectionChange(nextId) {
     setSectionId(nextId);
@@ -265,11 +259,7 @@ function MembershipDialog({ open, onOpenChange, onSaved, specialization, section
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
-          {failures.length > 0 ? (
-            <FailureList failures={failures} />
-          ) : (
-            <MutationError error={error} />
-          )}
+          <MutationFailure error={error} />
           {sections.length === 0 ? (
             <p className="text-sm font-medium text-signal" role="alert">
               No sections exist in this enrollment yet.

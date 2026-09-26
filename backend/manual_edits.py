@@ -457,11 +457,10 @@ def move_scheduled_class(db, scheduled_class_id, *, day, start_period,
     except ManualEditError:
         db.session.rollback()
         raise
-    except Exception as exc:  # noqa: BLE001 — rollback must cover any DB error
+    except Exception:  # noqa: BLE001 — rollback must cover any DB error
         db.session.rollback()
         raise ManualEditError(
-            f"Could not move scheduled class {scheduled_class_id}: {exc}",
+            f"Could not move scheduled class {scheduled_class_id}.",
             [_fail("MANUAL_EDIT_INVALID",
-                   f"Could not move scheduled class {scheduled_class_id}: "
-                   f"{exc}",
+                   f"Could not move scheduled class {scheduled_class_id}.",
                    {"scheduled_class_id": scheduled_class_id})])
