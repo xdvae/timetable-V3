@@ -7,6 +7,7 @@ import {
   CircleCheck,
   Download,
   LoaderCircle,
+  Pencil,
   Printer,
   TriangleAlert,
   UserCheck,
@@ -176,18 +177,32 @@ export function TimetablePage() {
           </p>
         )}
 
-        <Link
-          to="/timetable/free"
-          className="flex max-w-[520px] items-center gap-3 rounded-lg border border-line bg-panel p-4 outline-none transition-colors hover:border-steel focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <UserCheck className="size-6 shrink-0 text-sage" aria-hidden="true" />
-          <span>
-            <span className="block text-sm font-semibold text-ink">Who&apos;s free when</span>
-            <span className="block text-sm text-muted-foreground">
-              See every faculty member&apos;s status hour-by-hour for a chosen day.
+        <div className="grid max-w-[1060px] gap-3 md:grid-cols-2">
+          <Link
+            to="/timetable/editor"
+            className="flex items-center gap-3 rounded-lg border border-line bg-panel p-4 outline-none transition-colors hover:border-steel focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <Pencil className="size-6 shrink-0 text-brass-dark" aria-hidden="true" />
+            <span>
+              <span className="block text-sm font-semibold text-ink">Edit the timetable</span>
+              <span className="block text-sm text-muted-foreground">
+                Move classes with backend validation — the timetable is never regenerated here.
+              </span>
             </span>
-          </span>
-        </Link>
+          </Link>
+          <Link
+            to="/timetable/free"
+            className="flex items-center gap-3 rounded-lg border border-line bg-panel p-4 outline-none transition-colors hover:border-steel focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <UserCheck className="size-6 shrink-0 text-sage" aria-hidden="true" />
+            <span>
+              <span className="block text-sm font-semibold text-ink">Who&apos;s free when</span>
+              <span className="block text-sm text-muted-foreground">
+                See every faculty member&apos;s status hour-by-hour for a chosen day.
+              </span>
+            </span>
+          </Link>
+        </div>
 
         <div className="grid gap-5 lg:grid-cols-3">
           <Panel accent="steel" title="By Section">

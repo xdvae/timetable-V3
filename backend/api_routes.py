@@ -1553,6 +1553,27 @@ def api_locked_block_delete(bid):
 
 
 # ------------------------------------------------ manual editing (6G)
+@api_bp.route("/schedule/classes", methods=["GET"])
+@login_required
+def api_schedule_classes():
+    """READ: full scheduled-class list for the interactive editor (6O).
+
+    Returns every ScheduledClass display-ready via _scheduled_class_json
+    (id, assignment, day/start/length, room + names, lock + specialization
+    linkage) plus the config-derived day/period structure. Read-only:
+    SELECTs only, no scheduler invocation, no mutation. Existing
+    timetable-view responses are unchanged; this endpoint only adds the
+    per-class identity the lane-cell payload deliberately omits.
+    """
+    cfg = _get_config()
+    classes = ScheduledClass.query.order_by(ScheduledClass.id).all()
+    return jsonify({"classes": [_scheduled_class_json(sc) for sc in classes],
+                    "days": cfg.day_list() if cfg else [],
+                    "periods": cfg.period_list() if cfg else [],
+                    "break_after": cfg.break_after_periods if cfg else None,
+                    "has_schedule": len(classes) > 0})
+
+
 def _scheduled_class_json(sc):
     """Serialize one ScheduledClass with assignment context for the move API.
 

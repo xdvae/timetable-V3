@@ -7,6 +7,7 @@ import {
   LayoutGrid,
   Lock,
   LogOut,
+  Pencil,
   School,
   SlidersHorizontal,
   Upload,
@@ -52,6 +53,7 @@ export const NAV_GROUPS = [
     label: "Timetable",
     items: [
       { to: "/timetable", label: "Timetable", icon: CalendarDays, end: true },
+      { to: "/timetable/editor", label: "Editor", icon: Pencil },
       { to: "/timetable/free", label: "Who's Free", icon: UserCheck },
       { to: "/timetable/locked-blocks", label: "Fixed Blocks", icon: Lock },
     ],

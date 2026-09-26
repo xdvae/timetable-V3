@@ -15,6 +15,7 @@ import { AssignmentsPage } from "@/pages/Assignments/AssignmentsPage.jsx";
 import { ImportPage } from "@/pages/Import/ImportPage.jsx";
 import { OverviewPage } from "@/pages/Overview/OverviewPage.jsx";
 import { TimetablePage, TimetableViewPage } from "@/pages/Timetable/TimetablePage.jsx";
+import { TimetableEditorPage } from "@/pages/Timetable/TimetableEditorPage.jsx";
 import { LockedBlocksPage } from "@/pages/LockedBlocks/LockedBlocksPage.jsx";
 import { FreeFacultyPage } from "@/pages/FreeFaculty/FreeFacultyPage.jsx";
 import { ChangePasswordPage } from "@/pages/Account/ChangePasswordPage.jsx";
@@ -49,6 +50,7 @@ export const router = createBrowserRouter([
       { path: "import", element: <ImportPage /> },
       { path: "overview", element: <OverviewPage /> },
       { path: "timetable", element: <TimetablePage /> },
+      { path: "timetable/editor", element: <TimetableEditorPage /> },
       { path: "timetable/free", element: <FreeFacultyPage /> },
       { path: "timetable/locked-blocks", element: <LockedBlocksPage /> },
       { path: "timetable/:view/:id", element: <TimetableViewPage /> },

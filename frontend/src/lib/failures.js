@@ -43,6 +43,7 @@ export const FAILURE_LABELS = {
   BLOCK_GEOMETRY: "Invalid block placement",
   ROOM_REQUIRED: "Room required",
   ROOM_EQUIPMENT: "Room equipment insufficient",
+  BLOCK_LENGTH_INVALID: "Invalid block length",
   ASSIGNMENT_MISMATCH: "Assignment mismatch",
   KIND_NOT_ENABLED: "Unsupported block kind",
   UNKNOWN_KIND: "Unknown block kind",
