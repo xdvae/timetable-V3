@@ -5,6 +5,7 @@ import {
   DoorOpen,
   KeyRound,
   LayoutGrid,
+  Lock,
   LogOut,
   School,
   SlidersHorizontal,
@@ -52,6 +53,7 @@ export const NAV_GROUPS = [
     items: [
       { to: "/timetable", label: "Timetable", icon: CalendarDays, end: true },
       { to: "/timetable/free", label: "Who's Free", icon: UserCheck },
+      { to: "/timetable/locked-blocks", label: "Fixed Blocks", icon: Lock },
     ],
   },
   {
