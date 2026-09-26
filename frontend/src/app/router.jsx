@@ -9,6 +9,7 @@ import { RoomsPage } from "@/pages/Rooms/RoomsPage.jsx";
 import { FacultyAvailabilityPage, FacultyPage, FacultyPreferencesPage } from "@/pages/Faculty/FacultyPage.jsx";
 import { ProgramsPage } from "@/pages/Programs/ProgramsPage.jsx";
 import { EnrollmentsPage, SectionsPage } from "@/pages/Enrollments/EnrollmentsPage.jsx";
+import { SpecializationDetailPage, SpecializationsPage } from "@/pages/Specializations/SpecializationsPage.jsx";
 import { SubjectsPage } from "@/pages/Subjects/SubjectsPage.jsx";
 import { AssignmentsPage } from "@/pages/Assignments/AssignmentsPage.jsx";
 import { ImportPage } from "@/pages/Import/ImportPage.jsx";
@@ -40,6 +41,8 @@ export const router = createBrowserRouter([
       { path: "programs", element: <ProgramsPage /> },
       { path: "enrollments", element: <EnrollmentsPage /> },
       { path: "enrollments/:eid/sections", element: <SectionsPage /> },
+      { path: "enrollments/:eid/specializations", element: <SpecializationsPage /> },
+      { path: "enrollments/:eid/specializations/:sid", element: <SpecializationDetailPage /> },
       { path: "subjects", element: <SubjectsPage /> },
       { path: "assignments", element: <AssignmentsPage /> },
       { path: "import", element: <ImportPage /> },

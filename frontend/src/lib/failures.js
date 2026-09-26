@@ -25,6 +25,8 @@ export const FAILURE_LABELS = {
   SPECIALIZATION_CAPACITY: "Specialization capacity",
   SPECIALIZATION_ENROLLMENT: "Specialization cohort mismatch",
   SPECIALIZATION_MEMBERSHIP: "Specialization membership",
+  SPECIALIZATION_INVALID: "Invalid specialization",
+  PERSISTENCE_FAILED: "Could not save",
   INVALID_SWAP: "Invalid swap",
   UNKNOWN_ASSIGNMENT: "Assignment not found",
   UNKNOWN_FACULTY: "Faculty not found",

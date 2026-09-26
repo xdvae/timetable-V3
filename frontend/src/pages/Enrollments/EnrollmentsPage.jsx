@@ -253,6 +253,14 @@ export function EnrollmentsPage() {
                           View Sections
                         </Link>
                       </Button>
+                      <Button asChild variant="outline" size="sm">
+                        <Link
+                          to={`/enrollments/${enrollment.id}/specializations`}
+                          aria-label={`Manage specializations for ${enrollment.program_name} ${enrollment.year_label}`}
+                        >
+                          Specializations
+                        </Link>
+                      </Button>
                       <Button
                         variant="outline"
                         size="sm"
@@ -454,12 +462,20 @@ export function SectionsPage() {
         { label: contextLabel },
       ]}
       actions={
-        <Button asChild variant="outline" size="sm">
-          <Link to="/enrollments">
-            <ArrowLeft aria-hidden="true" />
-            Back to Enrollments
-          </Link>
-        </Button>
+        <div className="flex gap-2">
+          <Button asChild size="sm">
+            <Link to={`/enrollments/${eid}/specializations`}>
+              <Layers aria-hidden="true" />
+              Specializations
+            </Link>
+          </Button>
+          <Button asChild variant="outline" size="sm">
+            <Link to="/enrollments">
+              <ArrowLeft aria-hidden="true" />
+              Back to Enrollments
+            </Link>
+          </Button>
+        </div>
       }
     >
       <div className="space-y-5">

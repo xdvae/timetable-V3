@@ -775,7 +775,16 @@ export function AssignmentsPage() {
                 <TableRow key={assignment.id}>
                   <TableCell className="font-medium text-ink">{assignment.faculty_name}</TableCell>
                   <TableCell>{assignment.subject_name}</TableCell>
-                  <TableCell>{assignment.group}</TableCell>
+                  <TableCell>
+                    {assignment.group}
+                    {assignment.specialization_id != null ? (
+                      <span className="mt-1 block">
+                        <Badge variant="secondary" title="Specialization classes stay synchronized across the enrollment and cannot be moved independently.">
+                          Specialization
+                        </Badge>
+                      </span>
+                    ) : null}
+                  </TableCell>
                   <TableCell>
                     <SessionTypeBadge sessionType={assignment.session_type} />
                   </TableCell>
