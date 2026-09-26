@@ -323,17 +323,23 @@ def validate_move_candidate(db, scheduled_class_id, *, day, start_period,
                     "assignment_id": sc.assignment_id})])
     # Specialization sessions move only as a synchronized cohort (out of
     # scope here); an independent move would desynchronize the cohort.
-    if getattr(assignment, "specialization_id", None) is not None:
+    # Fail-safe: a row carrying a specialization slot link is treated as
+    # specialization-linked even if the assignment link is inconsistent —
+    # never silently allow an independent move of a synced row.
+    _spec_id = getattr(assignment, "specialization_id", None)
+    _slot_id = getattr(sc, "slot_id", None)
+    if _spec_id is not None or _slot_id is not None:
         raise ManualEditError(
             f"Scheduled class {scheduled_class_id} belongs to a "
             f"specialization and cannot be moved independently.",
             [_fail("SPECIALIZATION_SYNC",
                    f"Scheduled class {scheduled_class_id} belongs to "
-                   f"specialization {assignment.specialization_id}: moving "
+                   f"specialization {_spec_id}: moving "
                    f"one session would break cohort synchronization.",
                    {"scheduled_class_id": scheduled_class_id,
                     "assignment_id": sc.assignment_id,
-                    "specialization_id": assignment.specialization_id,
+                    "specialization_id": _spec_id,
+                    "slot_id": _slot_id,
                     "attempted_change": candidate,
                     "current": current})])
 
@@ -367,9 +373,12 @@ def validate_move_candidate(db, scheduled_class_id, *, day, start_period,
         start_period=start_period, length=sc.length, room_id=room_id,
         parent_section_key=info.get("parent_section_key"),
         faculty_name=faculty_name)
-    # Faculty consecutive-teaching limit (H12) is a day-level rule the
-    # per-placement validator leaves to the solver; a manual move must not
-    # introduce a violation the audit would flag.
+    # Faculty consecutive-teaching limit (H12, stable code
+    # FACULTY_CONSECUTIVE) is a day-level rule the per-placement validator
+    # leaves to the solver; a manual move must not introduce a violation
+    # the audit would flag. Uses the shared schedule_rules helper — no
+    # second implementation. (HN1 maps to MAX_TWO_THEORY inside
+    # validate_candidate above.)
     if snap.max_consecutive and snap.max_consecutive > 0:
         occupied = {p for (fid, d, p) in slim.faculty_occ
                     if fid == info.get("faculty_id") and d == day}

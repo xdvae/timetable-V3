@@ -48,6 +48,7 @@ export const FAILURE_LABELS = {
   UNKNOWN_KIND: "Unknown block kind",
   UNKNOWN_LOCKED_BLOCK: "Fixed block not found",
   GROUP_CONFLICT: "Student group already has a class",
+  MANUAL_EDIT_INVALID: "Invalid move request",
   UNKNOWN_PREFERENCE: "Preference not found",
   PREF_INVALID_KIND: "Unsupported preference kind",
   PREF_INVALID_DAYS: "Invalid preference days",

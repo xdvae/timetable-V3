@@ -109,3 +109,37 @@ No editor UI, no faculty reassignment or swapping, no cohort-wide
 specialization moves, no preferred-room optimization, no soft
 preferences, no audit log (the audit validates the resulting schedule
 unchanged).
+
+## Phase 6N hardening addendum (audit-first, no contract break)
+
+6N audited the implementation above and found it complete; only
+fail-safe hardening was added, with no change to the move contract:
+
+* Multi-period semantics: a `length > 1` class moves as one contiguous
+  footprint (`day`/`start_period`/`room_id` change; `assignment_id`,
+  `length`, `run_id`, lock/slot links preserved). Every covered period
+  is validated (room/faculty/group/hierarchy/HN1/H12/locked/spec);
+  trailing-period conflicts report the exact `period`.
+* Locked semantics: `is_locked` OR `locked_block_id` set is immovable
+  (`LOCKED_BLOCK`, fail-safe on inconsistent flag forms, no unlock
+  path, no bypass via extra body fields).
+* Specialization semantics: any assignment with `specialization_id`
+  set — or any row carrying a `slot_id` link (fail-safe for
+  inconsistent state) — is immovable independently
+  (`SPECIALIZATION_SYNC`); normal moves into a synced footprint fail
+  with `SPECIALIZATION_OVERLAP`; slots/classes of peers are untouched.
+* Preference semantics: soft `TIME_WINDOW` / `DAY_OFF_PREFERENCE` and
+  preferred theory rooms never block manual moves (hard rules still do).
+* Validation/mutation consistency: `validate-move` and `move` share
+  `validate_move_candidate` verbatim; dry-run is read-only (SELECTs
+  only, DB file SHA unchanged); failed mutations roll back
+  byte-identical (row snapshot + SHA verified); successes touch only
+  the intended row; the solver is never invoked.
+* Stable codes: H12 == `FACULTY_CONSECUTIVE`, HN1 == `MAX_TWO_THEORY`
+  (shared `schedule_rules` helpers, no second implementation);
+  `MANUAL_EDIT_INVALID` covers malformed requests/missing rows (404
+  only for a missing scheduled class); occupancy failures carry
+  `conflicting_class_id` / `conflicting_assignment_id`;
+  `frontend/src/lib/failures.js` labels all of the above.
+* No-op: a same-position request returns `{ok: true, noop: true}`
+  with no database write.
