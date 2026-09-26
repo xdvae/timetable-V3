@@ -33,6 +33,7 @@ import { DeleteConfirmDialog, FieldError, MutationError } from "@/components/fee
 import { useApi } from "@/hooks/use-api.js";
 import { useMutation } from "@/hooks/use-mutation.js";
 import { useToast } from "@/hooks/use-toast.js";
+import { emitOnSuccess, SUBJECTS_DOMAINS } from "@/lib/propagation.js";
 import { createSubject, deleteSubject, getSubjects } from "@/services/api/subjects.js";
 
 function Hours({ value, unit }) {
@@ -70,6 +71,7 @@ function AddSubjectDialog({ open, onOpenChange, onCreated, enrollments }) {
       toast.success(result.data.message || "Subject added.");
       onOpenChange(false);
       onCreated();
+      emitOnSuccess(result, SUBJECTS_DOMAINS);
     } else if (result.error) {
       toast.error(result.error.message || "Could not add subject.");
     }
@@ -206,7 +208,7 @@ function AddSubjectDialog({ open, onOpenChange, onCreated, enrollments }) {
 
 export function SubjectsPage() {
   const toast = useToast();
-  const { data, error, isLoading, retry } = useApi(getSubjects);
+  const { data, error, isLoading, retry } = useApi(getSubjects, ["subjects"]);
   const [addOpen, setAddOpen] = useState(false);
   const [addKey, setAddKey] = useState(0);
   const [pendingDelete, setPendingDelete] = useState(null);
@@ -224,6 +226,7 @@ export function SubjectsPage() {
       toast.success(result.data.message || "Subject deleted.");
       setPendingDelete(null);
       retry();
+      emitOnSuccess(result, SUBJECTS_DOMAINS);
     } else if (result.error) {
       toast.error(result.error.message || "Could not delete subject.");
     }

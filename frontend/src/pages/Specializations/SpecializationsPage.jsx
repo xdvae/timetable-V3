@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/table.jsx";
 import { DeleteConfirmDialog, FailureList, FieldError, MutationError } from "@/components/feedback/mutation.jsx";
 import { getFailures } from "@/lib/failures.js";
+import { emitOnSuccess, MEMBERSHIP_DOMAINS, SPECIALIZATION_DOMAINS } from "@/lib/propagation.js";
 import { useApi } from "@/hooks/use-api.js";
 import { useMutation } from "@/hooks/use-mutation.js";
 import { useToast } from "@/hooks/use-toast.js";
@@ -108,6 +109,7 @@ function CreateSpecializationDialog({ open, onOpenChange, onCreated, enrollmentI
       toast.success(result.data.message || "Specialization added.");
       onOpenChange(false);
       onCreated();
+      emitOnSuccess(result, SPECIALIZATION_DOMAINS);
     } else if (result.error) {
       toast.error(result.error.message || "Could not add specialization.");
     }
@@ -244,6 +246,9 @@ function MembershipDialog({ open, onOpenChange, onSaved, specialization, section
       toast.success(result.data.message || "Membership saved.");
       onOpenChange(false);
       onSaved();
+      // Phase 6P: membership is configuration; persisted schedule output
+      // changes only at the next generation, so only config domains emit.
+      emitOnSuccess(result, MEMBERSHIP_DOMAINS);
     } else if (result.error) {
       toast.error(result.error.message || "Could not save membership.");
     }
@@ -461,9 +466,9 @@ function ScheduleFootprintPanel({ specialization }) {
 export function SpecializationsPage() {
   const { eid } = useParams();
   const toast = useToast();
-  const specsQuery = useApi(getSpecializations);
+  const specsQuery = useApi(getSpecializations, ["specializations"]);
   const sectionsFetcher = useCallback(() => getEnrollmentSections(eid), [eid]);
-  const sectionsQuery = useApi(sectionsFetcher);
+  const sectionsQuery = useApi(sectionsFetcher, ["sections"]);
   const [createOpen, setCreateOpen] = useState(false);
   const [createKey, setCreateKey] = useState(0);
   const [pendingDelete, setPendingDelete] = useState(null);
@@ -486,6 +491,7 @@ export function SpecializationsPage() {
       toast.success(result.data.message || "Specialization deleted.");
       setPendingDelete(null);
       refetchAll();
+      emitOnSuccess(result, SPECIALIZATION_DOMAINS);
     } else if (result.error) {
       toast.error(result.error.message || "Could not delete specialization.");
     }
@@ -683,9 +689,9 @@ export function SpecializationDetailPage() {
   const navigate = useNavigate();
   const toast = useToast();
   const specFetcher = useCallback(() => getSpecialization(sid), [sid]);
-  const specQuery = useApi(specFetcher);
+  const specQuery = useApi(specFetcher, ["specializations"]);
   const sectionsFetcher = useCallback(() => getEnrollmentSections(eid), [eid]);
-  const sectionsQuery = useApi(sectionsFetcher);
+  const sectionsQuery = useApi(sectionsFetcher, ["sections"]);
   const [membershipOpen, setMembershipOpen] = useState(false);
   const [membershipKey, setMembershipKey] = useState(0);
   const [pendingRemove, setPendingRemove] = useState(null);
@@ -710,6 +716,7 @@ export function SpecializationDetailPage() {
       toast.success(result.data.message || "Membership removed.");
       setPendingRemove(null);
       refetchAll();
+      emitOnSuccess(result, MEMBERSHIP_DOMAINS);
     } else if (result.error) {
       toast.error(result.error.message || "Could not remove membership.");
     }
@@ -720,6 +727,9 @@ export function SpecializationDetailPage() {
     if (result.ok) {
       toast.success(result.data.message || "Specialization deleted.");
       setPendingDelete(false);
+      // Phase 6P: the list page remounts fresh on navigation; still emit so
+      // any other mounted specialization consumer refreshes too.
+      emitOnSuccess(result, SPECIALIZATION_DOMAINS);
       navigate(`/enrollments/${eid}/specializations`);
     } else if (result.error) {
       toast.error(result.error.message || "Could not delete specialization.");

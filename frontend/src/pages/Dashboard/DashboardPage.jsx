@@ -78,7 +78,7 @@ function GettingStarted({ counts }) {
 }
 
 export function DashboardPage() {
-  const { data, error, isLoading, retry } = useApi(getDashboard);
+  const { data, error, isLoading, retry } = useApi(getDashboard, ["dashboard"]);
 
   if (isLoading && !data) {
     return (

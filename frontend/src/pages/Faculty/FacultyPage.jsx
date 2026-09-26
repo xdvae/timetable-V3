@@ -37,6 +37,7 @@ import { useApi } from "@/hooks/use-api.js";
 import { useMutation } from "@/hooks/use-mutation.js";
 import { useToast } from "@/hooks/use-toast.js";
 import { getFailures } from "@/lib/failures.js";
+import { emitOnSuccess, FACULTY_DOMAINS, PREFERENCE_DOMAINS } from "@/lib/propagation.js";
 import {
   createFaculty,
   createFacultyPreference,
@@ -106,6 +107,7 @@ function AddFacultyDialog({ open, onOpenChange, onCreated }) {
       toast.success(result.data.message || "Faculty added.");
       onOpenChange(false);
       onCreated();
+      emitOnSuccess(result, FACULTY_DOMAINS);
     } else if (result.error) {
       toast.error(result.error.message || "Could not add faculty.");
     }
@@ -188,7 +190,7 @@ function AddFacultyDialog({ open, onOpenChange, onCreated }) {
 
 export function FacultyPage() {
   const toast = useToast();
-  const { data: faculty, error, isLoading, retry } = useApi(getFaculty);
+  const { data: faculty, error, isLoading, retry } = useApi(getFaculty, ["faculty"]);
   const [addOpen, setAddOpen] = useState(false);
   const [addKey, setAddKey] = useState(0);
   const [pendingDelete, setPendingDelete] = useState(null);
@@ -206,6 +208,7 @@ export function FacultyPage() {
       toast.success(result.data.message || "Faculty deleted.");
       setPendingDelete(null);
       retry();
+      emitOnSuccess(result, FACULTY_DOMAINS);
     } else if (result.error) {
       toast.error(result.error.message || "Could not delete faculty.");
     }
@@ -331,7 +334,7 @@ export function FacultyAvailabilityPage() {
   const toast = useToast();
   const { fid } = useParams();
   const fetcher = useCallback(() => getFacultyAvailability(fid), [fid]);
-  const { data, error, isLoading, retry } = useApi(fetcher);
+  const { data, error, isLoading, retry } = useApi(fetcher, ["faculty"]);
   const saver = useMutation((unavailable) => saveFacultyAvailability(fid, unavailable));
   const [selected, setSelected] = useState(null);
 
@@ -358,6 +361,7 @@ export function FacultyAvailabilityPage() {
       toast.success(result.data.message || "Availability updated.");
       setSelected(new Set(result.data.unavailable ?? [...active]));
       retry();
+      emitOnSuccess(result, FACULTY_DOMAINS);
     } else if (result.error) {
       toast.error(result.error.message || "Could not save availability.");
     }
@@ -671,6 +675,9 @@ function AddPreferenceDialog({ open, onOpenChange, facultyId, allDays, periods, 
       toast.success(result.data.message || "Preference saved.");
       onOpenChange(false);
       onSaved();
+      // Phase 6P: preferences are configuration for future generations only;
+      // the existing generated timetable is intentionally NOT invalidated.
+      emitOnSuccess(result, PREFERENCE_DOMAINS);
     } else if (result.error) {
       toast.error(result.error.message || "Could not save preference.");
     }
@@ -740,6 +747,8 @@ function EditPreferenceDialog({ preference, onOpenChange, allDays, periods, onSa
       toast.success(result.data.message || "Preference updated.");
       onOpenChange(false);
       onSaved();
+      // Phase 6P: see above — future generations only, not the live schedule.
+      emitOnSuccess(result, PREFERENCE_DOMAINS);
     } else if (result.error) {
       toast.error(result.error.message || "Could not update preference.");
     }
@@ -798,7 +807,7 @@ export function FacultyPreferencesPage() {
   const toast = useToast();
   const { fid } = useParams();
   const fetcher = useCallback(() => getFacultyPreferences(fid), [fid]);
-  const { data, error, isLoading, retry } = useApi(fetcher);
+  const { data, error, isLoading, retry } = useApi(fetcher, ["preferences"]);
   const [addOpen, setAddOpen] = useState(false);
   const [addKey, setAddKey] = useState(0);
   const [editing, setEditing] = useState(null);
@@ -812,6 +821,7 @@ export function FacultyPreferencesPage() {
       toast.success(result.data.message || "Preference deleted.");
       setPendingDelete(null);
       retry();
+      emitOnSuccess(result, PREFERENCE_DOMAINS);
     } else if (result.error) {
       toast.error(result.error.message || "Could not delete preference.");
     }

@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/table.jsx";
 import { DeleteConfirmDialog, FailureList, FieldError, MutationError } from "@/components/feedback/mutation.jsx";
 import { getFailures } from "@/lib/failures.js";
+import { emitOnSuccess, LOCKED_BLOCK_DOMAINS } from "@/lib/propagation.js";
 import { useApi } from "@/hooks/use-api.js";
 import { useMutation } from "@/hooks/use-mutation.js";
 import { useToast } from "@/hooks/use-toast.js";
@@ -155,6 +156,9 @@ function CreateLockedBlockDialog({ open, onOpenChange, onCreated, options }) {
       toast.success(result.data.message || "Fixed block added.");
       onOpenChange(false);
       onCreated();
+      // Phase 6P: config record + paired is_locked schedule row + assignment
+      // display context changed. Failures emit nothing.
+      emitOnSuccess(result, LOCKED_BLOCK_DOMAINS);
     } else if (result.error) {
       toast.error(result.error.message || "Could not add fixed block.");
     }
@@ -329,7 +333,7 @@ function CreateLockedBlockDialog({ open, onOpenChange, onCreated, options }) {
  */
 export function LockedBlocksPage() {
   const toast = useToast();
-  const query = useApi(fetchLockedBlocksPage);
+  const query = useApi(fetchLockedBlocksPage, ["lockedBlocks", "assignments", "rooms", "config"]);
   const [createOpen, setCreateOpen] = useState(false);
   const [createKey, setCreateKey] = useState(0);
   const [pendingDelete, setPendingDelete] = useState(null);
@@ -348,6 +352,7 @@ export function LockedBlocksPage() {
       toast.success(result.data.message || "Fixed block removed.");
       setPendingDelete(null);
       query.retry();
+      emitOnSuccess(result, LOCKED_BLOCK_DOMAINS);
     } else if (result.error) {
       toast.error(result.error.message || "Could not remove fixed block.");
     }

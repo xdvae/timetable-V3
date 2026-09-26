@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/table.jsx";
 import { DeleteConfirmDialog, FailureList, FieldError, LoadWarning, MutationError } from "@/components/feedback/mutation.jsx";
 import { getFailures } from "@/lib/failures.js";
+import { ASSIGNMENT_WRITE_DOMAINS, emitOnSuccess, REASSIGN_DOMAINS, SWAP_DOMAINS } from "@/lib/propagation.js";
 import { useApi } from "@/hooks/use-api.js";
 import { useMutation } from "@/hooks/use-mutation.js";
 import { useToast } from "@/hooks/use-toast.js";
@@ -113,6 +114,9 @@ function AddAssignmentDialog({ open, onOpenChange, onCreated, options }) {
       else toast.success(message, { title: "Assignment added" });
       onOpenChange(false);
       onCreated();
+      // Phase 6P: assignment rows changed (load/counts derived in overview).
+      // Persisted schedule rows are untouched until the next generation.
+      emitOnSuccess(result, ASSIGNMENT_WRITE_DOMAINS);
     } else if (result.error) {
       toast.error(result.error.message || "Could not add assignment.");
     }
@@ -337,6 +341,9 @@ function ReassignFacultyDialog({ open, onOpenChange, onApplied, assignment, facu
         toast.warning(warning.message || "Weekly load exceeded.", { title: "Weekly load" });
       }
       onApplied();
+      // Phase 6P: ownership + class faculty labels + loads changed. A true
+      // noop writes nothing and emits nothing. Validation never reaches here.
+      emitOnSuccess(result, REASSIGN_DOMAINS);
     } else if (result.error) {
       toast.error(result.error.message || "Could not reassign faculty.");
     }
@@ -508,6 +515,8 @@ function SwapFacultyDialog({ open, onOpenChange, onApplied, assignments }) {
         }
       }
       onApplied();
+      // Phase 6P: both ownerships + labels + loads changed (noop emits nothing).
+      emitOnSuccess(result, SWAP_DOMAINS);
     } else if (result.error) {
       toast.error(result.error.message || "Could not swap faculties.");
     }
@@ -647,7 +656,7 @@ function SwapFacultyDialog({ open, onOpenChange, onApplied, assignments }) {
 
 export function AssignmentsPage() {
   const toast = useToast();
-  const { data, error, isLoading, retry } = useApi(getAssignments);
+  const { data, error, isLoading, retry } = useApi(getAssignments, ["assignments"]);
   const [addOpen, setAddOpen] = useState(false);
   const [addKey, setAddKey] = useState(0);
   const [pendingDelete, setPendingDelete] = useState(null);
@@ -689,6 +698,7 @@ export function AssignmentsPage() {
       toast.success(result.data.message || "Assignment deleted.");
       setPendingDelete(null);
       retry();
+      emitOnSuccess(result, ASSIGNMENT_WRITE_DOMAINS);
     } else if (result.error) {
       toast.error(result.error.message || "Could not delete assignment.");
     }

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button.jsx";
 import { Input } from "@/components/ui/input.jsx";
 import { Label } from "@/components/ui/label.jsx";
 import { useToast } from "@/hooks/use-toast.js";
+import { emitOnSuccess, IMPORT_WORKLOAD_DOMAINS, ROOMS_DOMAINS } from "@/lib/propagation.js";
 import { importRoomsCsv, importWorkloadCsv } from "@/services/api/import.js";
 
 const MAX_SHOWN_ERRORS = 10;
@@ -21,7 +22,7 @@ function isCsvFile(file) {
  * the backend (csv_import.py); this only picks a .csv file, POSTs it as
  * multipart FormData, and renders the backend's own messages + row errors.
  */
-function ImportCard({ inputId, title, description, columns, upload, successTitle, sampleHref, sampleLabel }) {
+function ImportCard({ inputId, title, description, columns, upload, successTitle, sampleHref, sampleLabel, invalidateOn }) {
   const toast = useToast();
   const inputRef = useRef(null);
   const [file, setFile] = useState(null);
@@ -60,6 +61,10 @@ function ImportCard({ inputId, title, description, columns, upload, successTitle
       } else {
         toast.success(response.message, { title: successTitle });
       }
+      // Phase 6P: a resolved import commits its rows (row warnings never
+      // block the valid rows), so mounted consumers of the written domains
+      // refresh. Rejections emit nothing.
+      emitOnSuccess({ ok: true }, invalidateOn);
       setFile(null);
       if (inputRef.current) inputRef.current.value = "";
     } catch (err) {
@@ -166,6 +171,7 @@ export function ImportPage() {
           successTitle="Rooms import finished"
           sampleHref="/import/sample/rooms"
           sampleLabel="Download sample rooms CSV"
+          invalidateOn={ROOMS_DOMAINS}
         />
         <ImportCard
           inputId="workload-csv"
@@ -176,6 +182,7 @@ export function ImportPage() {
           successTitle="Workload import finished"
           sampleHref="/import/sample/workload"
           sampleLabel="Download sample workload CSV"
+          invalidateOn={IMPORT_WORKLOAD_DOMAINS}
         />
       </div>
 

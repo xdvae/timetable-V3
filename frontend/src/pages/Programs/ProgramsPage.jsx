@@ -26,6 +26,7 @@ import { DeleteConfirmDialog, FieldError, MutationError } from "@/components/fee
 import { useApi } from "@/hooks/use-api.js";
 import { useMutation } from "@/hooks/use-mutation.js";
 import { useToast } from "@/hooks/use-toast.js";
+import { emitOnSuccess, PROGRAMS_DOMAINS } from "@/lib/propagation.js";
 import { createProgram, deleteProgram, getPrograms } from "@/services/api/programs.js";
 
 function AddProgramDialog({ open, onOpenChange, onCreated }) {
@@ -41,6 +42,7 @@ function AddProgramDialog({ open, onOpenChange, onCreated }) {
       toast.success(result.data.message || "Program added.");
       onOpenChange(false);
       onCreated();
+      emitOnSuccess(result, PROGRAMS_DOMAINS);
     } else if (result.error) {
       toast.error(result.error.message || "Could not add program.");
     }
@@ -97,7 +99,7 @@ function AddProgramDialog({ open, onOpenChange, onCreated }) {
 
 export function ProgramsPage() {
   const toast = useToast();
-  const { data: programs, error, isLoading, retry } = useApi(getPrograms);
+  const { data: programs, error, isLoading, retry } = useApi(getPrograms, ["programs"]);
   const [addOpen, setAddOpen] = useState(false);
   const [addKey, setAddKey] = useState(0);
   const [pendingDelete, setPendingDelete] = useState(null);
@@ -115,6 +117,7 @@ export function ProgramsPage() {
       toast.success(result.data.message || "Program deleted.");
       setPendingDelete(null);
       retry();
+      emitOnSuccess(result, PROGRAMS_DOMAINS);
     } else if (result.error) {
       toast.error(result.error.message || "Could not delete program.");
     }

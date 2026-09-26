@@ -9,6 +9,7 @@ import { FieldError, MutationError } from "@/components/feedback/mutation.jsx";
 import { useApi } from "@/hooks/use-api.js";
 import { useMutation } from "@/hooks/use-mutation.js";
 import { useToast } from "@/hooks/use-toast.js";
+import { emitOnSuccess, CONFIG_DOMAINS } from "@/lib/propagation.js";
 import { getConfig, saveConfig } from "@/services/api/config.js";
 
 function ConfigField({ id, label, help, error, children }) {
@@ -53,6 +54,9 @@ function ConfigForm({ initial, onSaved }) {
     if (result.ok) {
       toast.success(result.data.message || "Configuration saved.");
       onSaved();
+      // Phase 6P: notify mounted config consumers (same-tick as the local
+      // onSaved retry, so React batches both into a single GET).
+      emitOnSuccess(result, CONFIG_DOMAINS);
     } else if (result.error) {
       toast.error(result.error.message || "Could not save configuration.");
     }
@@ -185,7 +189,7 @@ function ConfigForm({ initial, onSaved }) {
 }
 
 export function ConfigPage() {
-  const { data: config, error, isLoading, retry } = useApi(getConfig);
+  const { data: config, error, isLoading, retry } = useApi(getConfig, ["config"]);
 
   if (isLoading && !config) {
     return (

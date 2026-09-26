@@ -28,6 +28,7 @@ import {
 import { useApi } from "@/hooks/use-api.js";
 import { useMutation } from "@/hooks/use-mutation.js";
 import { useToast } from "@/hooks/use-toast.js";
+import { emitOnSuccess, GENERATION_DOMAINS } from "@/lib/propagation.js";
 import { exportUrl, getTimetableHome, getTimetableView, runScheduler } from "@/services/api/timetable.js";
 import { TimetableGrid } from "@/components/timetable/TimetableGrid.jsx";
 import { TimetableLegend } from "@/components/timetable/TimetableLegend.jsx";
@@ -62,12 +63,15 @@ function GeneratePanel({ onGenerated }) {
       setResult({ ok: true, data: res.data });
       toast.success(res.data.message || "Timetable generated.", { title: "Schedule generated" });
       onGenerated();
+      // Phase 6P: generation replaced the persisted schedule (non-locked rows
+      // + specialization slots); every schedule-dependent domain emits.
+      emitOnSuccess(res, GENERATION_DOMAINS);
     } else if (res.error) {
       // Backend message preserved verbatim (e.g. "Scheduling failed: …");
-      // the previous schedule, if any, is left untouched server-side.
+      // the previous schedule, if any, is left untouched server-side, so a
+      // failed generation emits nothing and triggers no refetch.
       setResult({ ok: false, error: res.error });
       toast.error(res.error.message || "Scheduling failed.", { title: "Scheduling failed" });
-      onGenerated();
     }
   }
 
@@ -140,7 +144,7 @@ function GeneratePanel({ onGenerated }) {
 }
 
 export function TimetablePage() {
-  const { data, error, isLoading, retry } = useApi(getTimetableHome);
+  const { data, error, isLoading, retry } = useApi(getTimetableHome, ["schedule"]);
 
   if (isLoading && !data) {
     return (
@@ -254,7 +258,7 @@ export function TimetableViewPage() {
   const { view, id } = useParams();
   const isValidView = VALID_VIEWS.includes(view);
   const fetcher = useCallback(() => getTimetableView(view, id), [view, id]);
-  const { data, error, isLoading, retry } = useApi(fetcher);
+  const { data, error, isLoading, retry } = useApi(fetcher, ["schedule"]);
 
   if (!isValidView) {
     return (

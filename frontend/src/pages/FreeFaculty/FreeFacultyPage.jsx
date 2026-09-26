@@ -41,7 +41,7 @@ export function FreeFacultyPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const dayParam = searchParams.get("day");
   const fetcher = useCallback(() => getFreeFaculty(dayParam ?? undefined), [dayParam]);
-  const { data, error, isLoading, retry } = useApi(fetcher);
+  const { data, error, isLoading, retry } = useApi(fetcher, ["schedule"]);
 
   const busyByCell = useMemo(() => {
     const map = new Map();

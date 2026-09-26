@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/table.jsx";
 import { DeleteConfirmDialog, FailureList, FieldError, MutationError } from "@/components/feedback/mutation.jsx";
 import { getFailures } from "@/lib/failures.js";
+import { emitOnSuccess, ENROLLMENTS_DOMAINS, PREFERRED_ROOM_DOMAINS } from "@/lib/propagation.js";
 import { useApi } from "@/hooks/use-api.js";
 import { useMutation } from "@/hooks/use-mutation.js";
 import { useToast } from "@/hooks/use-toast.js";
@@ -63,6 +64,7 @@ function AddEnrollmentDialog({ open, onOpenChange, onCreated, programs }) {
       toast.success(result.data.message || "Enrollment added.");
       onOpenChange(false);
       onCreated();
+      emitOnSuccess(result, ENROLLMENTS_DOMAINS);
     } else if (result.error) {
       toast.error(result.error.message || "Could not add enrollment.");
     }
@@ -139,7 +141,7 @@ function AddEnrollmentDialog({ open, onOpenChange, onCreated, programs }) {
 
 export function EnrollmentsPage() {
   const toast = useToast();
-  const { data, error, isLoading, retry } = useApi(getEnrollments);
+  const { data, error, isLoading, retry } = useApi(getEnrollments, ["enrollments"]);
   const [addOpen, setAddOpen] = useState(false);
   const [addKey, setAddKey] = useState(0);
   const [pendingDelete, setPendingDelete] = useState(null);
@@ -157,6 +159,7 @@ export function EnrollmentsPage() {
       toast.success(result.data.message || "Enrollment deleted.");
       setPendingDelete(null);
       retry();
+      emitOnSuccess(result, ENROLLMENTS_DOMAINS);
     } else if (result.error) {
       toast.error(result.error.message || "Could not delete enrollment.");
     }
@@ -347,6 +350,9 @@ function PreferredRoomControl({ section, rooms, roomsLoading, roomsUnavailable, 
         });
       }
       onSaved();
+      // Phase 6P: a section preference for future generations only; the
+      // existing generated timetable is intentionally NOT invalidated.
+      emitOnSuccess(result, PREFERRED_ROOM_DOMAINS);
     } else if (result.error) {
       toast.error(result.error.message || "Could not save preferred room.");
     }
@@ -405,8 +411,8 @@ function PreferredRoomControl({ section, rooms, roomsLoading, roomsUnavailable, 
 export function SectionsPage() {
   const { eid } = useParams();
   const fetcher = useCallback(() => getEnrollmentSections(eid), [eid]);
-  const { data, error, isLoading, retry } = useApi(fetcher);
-  const roomsQuery = useApi(getRooms);
+  const { data, error, isLoading, retry } = useApi(fetcher, ["sections"]);
+  const roomsQuery = useApi(getRooms, ["rooms"]);
 
   if (isLoading && !data) {
     return (

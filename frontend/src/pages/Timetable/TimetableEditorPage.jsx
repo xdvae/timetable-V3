@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/select.jsx";
 import { FailureList, MutationError } from "@/components/feedback/mutation.jsx";
 import { getFailures } from "@/lib/failures.js";
+import { emitOnSuccess, MOVE_DOMAINS } from "@/lib/propagation.js";
 import { cn } from "@/lib/utils";
 import { useApi } from "@/hooks/use-api.js";
 import { useMutation } from "@/hooks/use-mutation.js";
@@ -492,6 +493,9 @@ function MoveDialog({ cls, days, periods, rooms, classes, open, onOpenChange, on
         toast.success(result.data.message || "Class moved.", { title: "Move applied" });
       }
       onApplied();
+      // Phase 6P: placement changed. A true noop writes nothing and emits
+      // nothing; validation and apply-failures never reach here.
+      emitOnSuccess(result, MOVE_DOMAINS);
     } else if (result.error) {
       // Possible stale schedule (another mutation landed in between):
       // surface the authoritative error and recover via refetch.
@@ -721,7 +725,7 @@ function DetailsDialog({ cls, periods, open, onOpenChange }) {
 }
 
 export function TimetableEditorPage() {
-  const query = useApi(fetchEditorData);
+  const query = useApi(fetchEditorData, ["schedule", "rooms"]);
   const [selectedId, setSelectedId] = useState(null);
   const [moveOpen, setMoveOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);

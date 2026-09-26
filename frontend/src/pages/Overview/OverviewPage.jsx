@@ -124,7 +124,7 @@ function FacultyTab({ faculty }) {
 }
 
 export function OverviewPage() {
-  const { data, error, isLoading, retry } = useApi(getOverview);
+  const { data, error, isLoading, retry } = useApi(getOverview, ["overview"]);
 
   if (isLoading && !data) {
     return (

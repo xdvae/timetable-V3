@@ -34,6 +34,7 @@ import { DeleteConfirmDialog, FieldError, MutationError } from "@/components/fee
 import { useApi } from "@/hooks/use-api.js";
 import { useMutation } from "@/hooks/use-mutation.js";
 import { useToast } from "@/hooks/use-toast.js";
+import { emitOnSuccess, ROOMS_DOMAINS } from "@/lib/propagation.js";
 import { createRoom, deleteRoom, getRooms } from "@/services/api/rooms.js";
 
 function RoomTypeBadge({ roomType }) {
@@ -62,6 +63,7 @@ function AddRoomDialog({ open, onOpenChange, onCreated }) {
       toast.success(result.data.message || "Room added.");
       onOpenChange(false);
       onCreated();
+      emitOnSuccess(result, ROOMS_DOMAINS);
     } else if (result.error) {
       toast.error(result.error.message || "Could not add room.");
     }
@@ -151,7 +153,7 @@ function AddRoomDialog({ open, onOpenChange, onCreated }) {
 
 export function RoomsPage() {
   const toast = useToast();
-  const { data: rooms, error, isLoading, retry } = useApi(getRooms);
+  const { data: rooms, error, isLoading, retry } = useApi(getRooms, ["rooms"]);
   const [addOpen, setAddOpen] = useState(false);
   const [addKey, setAddKey] = useState(0);
   const [pendingDelete, setPendingDelete] = useState(null);
@@ -169,6 +171,7 @@ export function RoomsPage() {
       toast.success(result.data.message || "Room deleted.");
       setPendingDelete(null);
       retry();
+      emitOnSuccess(result, ROOMS_DOMAINS);
     } else if (result.error) {
       toast.error(result.error.message || "Could not delete room.");
     }
