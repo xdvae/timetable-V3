@@ -1405,12 +1405,29 @@ def api_schedule_run():
         faculty_preferences=faculty_pref_rows,
     )
 
-    if status in ("INFEASIBLE", "NO_SESSIONS"):
+    if status in ("INFEASIBLE", "NO_SESSIONS", "UNKNOWN", "MODEL_INVALID"):
         # FAILURE: preserve the previous schedule — nothing is deleted or
         # written here. Locked-caused infeasibility carries a structured
         # SCHEDULING_INFEASIBLE payload identifying the blocking locks.
         # Phase 6F: specialization infeasibility carries its stable code
         # (SPECIALIZATION_SYNC/CAPACITY/OVERLAP/...) for administrators.
+        # Phase 6T: UNKNOWN (solver timeout/inconclusive) is never reported
+        # as infeasible — it returns SCHEDULING_FAILED with timeout details.
+        # MODEL_INVALID (solver rejected the model) is a sanitized 500.
+        if status == "MODEL_INVALID":
+            raise ApiError(error_contract.INTERNAL_ERROR_MESSAGE, 500,
+                           code=error_contract.INTERNAL_ERROR,
+                           details={"reason": "scheduling model rejected"})
+        if status == "UNKNOWN":
+            reason = message or "time limit reached"
+            raise ApiError(f"Scheduling did not complete: {message}", 422,
+                           code=error_contract.SCHEDULING_FAILED,
+                           details={"reason": reason,
+                                    "status": "UNKNOWN",
+                                    "timeout": True},
+                           failures=[{"code": error_contract.SCHEDULING_FAILED,
+                                      "message": reason,
+                                      "details": {"status": "UNKNOWN"}}])
         msg = message or ""
         for _code in ("SPECIALIZATION_SYNC", "SPECIALIZATION_CAPACITY",
                       "SPECIALIZATION_OVERLAP", "SPECIALIZATION_ENROLLMENT",

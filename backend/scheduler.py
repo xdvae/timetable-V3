@@ -1076,7 +1076,7 @@ def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
     solver.parameters.num_search_workers = 8
     status = solver.Solve(model)
 
-    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+    if status == cp_model.INFEASIBLE:
         msg = ("No valid timetable could be found with the current data and "
                "constraints. Try adding more rooms, relaxing faculty availability, "
                "or checking for faculty overloaded across too many sections.")
@@ -1084,6 +1084,21 @@ def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
             msg += (f" Locked block(s) {sorted(locked_ids)} are part of the "
                     f"conflict and were not moved.")
         return "INFEASIBLE", [], msg
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        # Phase 6T: the solver did NOT prove infeasibility — it stopped
+        # without a solution (timeout/UNKNOWN) or rejected the model
+        # (MODEL_INVALID). These must never be reported as INFEASIBLE.
+        if status == cp_model.MODEL_INVALID:
+            return ("MODEL_INVALID", [],
+                    "The scheduling model was rejected by the solver. "
+                    "Please try again; if the problem persists, contact support.")
+        msg = ("The scheduler could not finish within the time limit, so no "
+               "timetable was produced and feasibility is unknown. Try again "
+               "(a longer run may succeed), reduce demand, or add "
+               "rooms/faculty availability.")
+        if locked_ids:
+            msg += (f" Locked block(s) {sorted(locked_ids)} were not moved.")
+        return "UNKNOWN", [], msg
 
     placements = []
     for s_idx, sess in enumerate(sessions):

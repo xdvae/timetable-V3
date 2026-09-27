@@ -129,12 +129,13 @@ def _ok(status):
 def classify_status(status):
     """Harness-side classification: never call a timeout INFEASIBLE.
 
-    run_scheduler currently folds solver timeouts into "INFEASIBLE" (6S audit
-    §18: documented wrapper limitation, deferred to 6T). The harness keeps
-    the raw string but classifies it honestly: only a solver-proven "OPTIMAL"
-    is optimal, "FEASIBLE" is feasible-but-unbounded, anything else is a
-    failure whose cause (infeasible vs time-limit) is UNKNOWN from this
-    return contract alone.
+    Phase 6T corrected the wrapper (backend/scheduler.py now returns
+    "UNKNOWN" for solver timeouts/inconclusive outcomes and "MODEL_INVALID"
+    for rejected models; only a solver-proven outcome is "INFEASIBLE"). The
+    harness keeps the raw string but classifies it honestly: only a
+    solver-proven "OPTIMAL" is optimal, "FEASIBLE" is feasible-but-unbounded,
+    anything else is a failure whose cause (infeasible vs time-limit) is
+    UNKNOWN from this return contract alone.
     """
     if status == "OPTIMAL":
         return "OPTIMAL"
