@@ -1,7 +1,7 @@
 /**
  * Phase 6P — lightweight domain invalidation bus.
  *
- * UniSchedule has no API response cache (see backend/PHASE_6P1_PROPAGATION_AUDIT.md):
+ * UniSchedule has no API response cache:
  * every page owns independent GET-on-mount fetches via `useApi`, and every
  * mutation refetches only its own page via `retry()`. This module closes the
  * cross-page gap with the smallest possible mechanism: successful
