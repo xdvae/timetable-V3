@@ -199,6 +199,37 @@ def faculty_time_scale(num_sessions):
     return 2 * (num_sessions or 0) + 1
 
 
+def objective_time_scale(num_sessions, faculty_map):
+    """Phase 6S: select the start-period multiplier for one solve.
+
+    Returns `faculty_time_scale(num_sessions)` when at least one faculty
+    preference survived normalization (an active secondary exists), else
+    `preferred_time_scale(num_sessions)`. Keys on the *normalized* map so
+    junk-only input keeps the tighter room-only scale. Pure; the
+    dominance proofs live on the two scale helpers.
+    """
+    if faculty_map:
+        return faculty_time_scale(num_sessions)
+    return preferred_time_scale(num_sessions)
+
+
+def placement_objective_cost(session, day, start, room_id, time_scale,
+                             preferred_map, faculty_map):
+    """Phase 6S: soft cost of one candidate placement in objective units.
+
+    `start * time_scale` (primary: time-compactness) plus the two binary
+    secondary penalties (preferred theory room, faculty preference).
+    One unit of `start` always outweighs every achievable secondary
+    improvement combined — see `preferred_time_scale` /
+    `faculty_time_scale`. Pure: operates on the session dict + placement
+    ints only; never affects domains or hard constraints.
+    """
+    return (start * time_scale
+            + preferred_room_penalty(session, room_id, preferred_map)
+            + faculty_time_penalty(session.get("faculty_id"), day, start,
+                                   session["length"], faculty_map))
+
+
 def _residual_assignments(assignments, locked_periods):
     """Copies of assignments with locked periods subtracted from demand.
 
@@ -1028,19 +1059,15 @@ def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
     preferred_map = normalize_preferred_rooms(preferred_theory_rooms, rooms)
     faculty_map = normalize_faculty_preferences(
         faculty_preferences, days, num_periods)
-    if faculty_map:
-        time_scale = faculty_time_scale(len(sessions))
-    else:
-        time_scale = preferred_time_scale(len(sessions))
+    time_scale = objective_time_scale(len(sessions), faculty_map)
     objective_terms = []
     for s_idx, sess in enumerate(sessions):
         for (d, start, r) in session_options[s_idx]:
-            # squared-ish weighting via linear scale keeps it simple & fast for CP-SAT
+            # Linear start scaling keeps the model simple & fast for CP-SAT;
+            # per-placement cost is placement_objective_cost (Phase 6S).
             objective_terms.append(
-                (start * time_scale
-                 + preferred_room_penalty(sess, r, preferred_map)
-                 + faculty_time_penalty(sess.get("faculty_id"), d, start,
-                                        sess["length"], faculty_map))
+                placement_objective_cost(sess, d, start, r, time_scale,
+                                         preferred_map, faculty_map)
                 * x[(s_idx, d, start, r)])
     model.Minimize(sum(objective_terms))
 
