@@ -125,7 +125,9 @@ export function FreeFacultyPage() {
             <Table aria-label={`Faculty availability for ${activeDay}`}>
               <TableHeader>
                 <TableRow>
-                  <TableHead scope="col">Faculty</TableHead>
+                  <TableHead scope="col" className="sticky left-0 z-20 bg-panel">
+                    Faculty
+                  </TableHead>
                   {periods.map((period, index) => (
                     <TableHead key={`${period}-${index}`} scope="col" className="tabular-nums">
                       {period}
@@ -136,7 +138,9 @@ export function FreeFacultyPage() {
               <TableBody>
                 {faculty.map((member) => (
                   <TableRow key={member.id}>
-                    <TableCell className="bg-steel-tint font-semibold text-ink">{member.name}</TableCell>
+                    <TableCell className="sticky left-0 z-10 bg-steel-tint font-semibold text-ink">
+                      {member.name}
+                    </TableCell>
                     {periods.map((period, periodIndex) => {
                       const label = busyByCell.get(`${member.id}:${periodIndex}`);
                       return (

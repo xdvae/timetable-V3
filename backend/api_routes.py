@@ -201,17 +201,31 @@ def _config_json(cfg):
 
 def _cell_json(sc):
     """Structured per-class cell payload: same fields the old Jinja timetable
-    view rendered as HTML, without the HTML."""
+    view rendered as HTML, without the HTML.
+
+    Phase 6R (additive, read-only): also surfaces fixed/specialization
+    state (`is_locked`, `locked_block_id`, `specialization_id`,
+    `specialization`) so the read-only timetable cards can badge them.
+    Every pre-6R key is unchanged; the editor bulk endpoint
+    (`_scheduled_class_json`) resolves specialization identically."""
     a = sc.assignment
     subj = a.subject.name if a.subject else "?"
     fac = a.faculty.name if a.faculty else "?"
     room = sc.room.name if sc.room else "?"
+    spec_id = spec_name = None
+    if a is not None and getattr(a, "specialization_id", None) is not None:
+        spec_id = a.specialization_id
+        spec = getattr(a, "specialization", None)
+        spec_name = spec.name if spec else f"specialization:{spec_id}"
     return {"assignment_id": sc.assignment_id, "subject": subj, "faculty": fac,
             "group": a.group_label(), "room": room,
             "session_type": a.session_type,
             "kind": "Lab" if a.session_type == "practical" else "Theory",
             "css_class": "cell-practical" if a.session_type == "practical" else "cell-theory",
-            "start_period": sc.start_period, "length": sc.length, "day": sc.day}
+            "start_period": sc.start_period, "length": sc.length, "day": sc.day,
+            "is_locked": bool(getattr(sc, "is_locked", False)),
+            "locked_block_id": getattr(sc, "locked_block_id", None),
+            "specialization_id": spec_id, "specialization": spec_name}
 
 
 def _lane_rows_json(classes, days, periods):

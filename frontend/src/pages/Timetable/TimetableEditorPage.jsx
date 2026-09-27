@@ -36,6 +36,14 @@ import { FailureList, MutationError } from "@/components/feedback/mutation.jsx";
 import { getFailures } from "@/lib/failures.js";
 import { emitOnSuccess, MOVE_DOMAINS } from "@/lib/propagation.js";
 import { cn } from "@/lib/utils";
+import {
+  groupLabel,
+  isLocked,
+  isMovable,
+  isSpecialization,
+  summarizeEditorClasses,
+  todayAbbrev,
+} from "@/components/timetable/timetable-helpers.js";
 import { useApi } from "@/hooks/use-api.js";
 import { useMutation } from "@/hooks/use-mutation.js";
 import { useToast } from "@/hooks/use-toast.js";
@@ -73,23 +81,6 @@ function fetchEditorData() {
       rooms: rooms ?? [],
     })
   );
-}
-
-function groupLabel(cls) {
-  return cls.specialization ?? cls.lab_group ?? cls.section ?? "?";
-}
-
-function isLocked(cls) {
-  return Boolean(cls.is_locked) || cls.locked_block_id != null;
-}
-
-/** Fail-safe: a row carrying a specialization slot link is spec-linked. */
-function isSpecialization(cls) {
-  return cls.specialization_id != null || cls.slot_id != null;
-}
-
-function isMovable(cls) {
-  return !isLocked(cls) && !isSpecialization(cls);
 }
 
 function placementLabel(cls, periods) {
@@ -191,7 +182,7 @@ function ClassCardButton({ cls, periods, selected, onSelect }) {
         locked && "border-dashed opacity-90"
       )}
     >
-      <span className="block text-[0.8rem] leading-snug font-semibold text-ink">
+      <span className="block text-sm leading-snug font-semibold text-ink" title={cls.subject}>
         {locked ? (
           <Lock className="mr-1 inline size-3" aria-hidden="true" />
         ) : spec ? (
@@ -200,8 +191,11 @@ function ClassCardButton({ cls, periods, selected, onSelect }) {
         {cls.subject}
       </span>
       <ClassBadges cls={cls} />
-      <span className="mt-1 block truncate text-xs text-ink">{cls.faculty}</span>
-      <span className="block truncate text-xs text-muted-foreground">
+      <span className="mt-1 block truncate text-xs text-ink" title={cls.faculty}>{cls.faculty}</span>
+      <span
+        className="block truncate text-xs text-muted-foreground"
+        title={`${groupLabel(cls)} | Room ${cls.room}`}
+      >
         {groupLabel(cls)} | Room {cls.room}
       </span>
     </button>
@@ -215,7 +209,7 @@ function ClassCardButton({ cls, periods, selected, onSelect }) {
  * slim continuation strip so a multi-period block visibly occupies its
  * whole footprint while keeping single-ScheduledClass semantics.
  */
-function EditorGrid({ days, periods, classes, selectedId, onSelect }) {
+function EditorGrid({ days, periods, classes, selectedId, onSelect, today }) {
   const starters = useMemo(() => {
     const map = new Map();
     for (const cls of classes) {
@@ -250,18 +244,26 @@ function EditorGrid({ days, periods, classes, selectedId, onSelect }) {
   return (
     <div className="overflow-x-auto rounded-lg border border-line" role="grid" aria-label="Editable timetable grid">
       <div className="grid gap-px bg-line" style={{ gridTemplateColumns: columns, minWidth }} role="row">
-        <div role="columnheader" className="sticky left-0 bg-muted px-2 py-2 text-xs font-semibold text-ink">
+        <div role="columnheader" className="sticky left-0 z-20 bg-muted px-2 py-2 text-xs font-semibold text-ink">
           Period / Day
         </div>
-        {days.map((day) => (
-          <div
-            key={day}
-            role="columnheader"
-            className="bg-muted px-2 py-2 text-center text-xs font-semibold text-ink"
-          >
-            {day}
-          </div>
-        ))}
+        {days.map((day) => {
+          const isToday = today != null && day === today;
+          return (
+            <div
+              key={day}
+              role="columnheader"
+              aria-label={isToday ? `${day} (today)` : day}
+              className={cn(
+                "bg-muted px-2 py-2 text-center text-xs font-semibold text-ink",
+                isToday && "bg-brass/25"
+              )}
+            >
+              {day}
+              {isToday ? " · Today" : null}
+            </div>
+          );
+        })}
       </div>
       {periods.map((label, period) => (
         <div
@@ -273,7 +275,7 @@ function EditorGrid({ days, periods, classes, selectedId, onSelect }) {
         >
           <div
             role="rowheader"
-            className="sticky left-0 bg-steel-tint px-2 py-2 text-xs font-semibold text-ink tabular-nums"
+            className="sticky left-0 z-10 bg-steel-tint px-2 py-2 text-xs font-semibold text-ink tabular-nums"
           >
             P{period}
             <span className="block text-[0.65rem] font-normal whitespace-normal">{label}</span>
@@ -413,6 +415,7 @@ function MoveDialog({ cls, days, periods, rooms, classes, open, onOpenChange, on
   const [destStart, setDestStart] = useState(String(cls.start_period));
   const [destRoom, setDestRoom] = useState(String(cls.room_id));
   const [phase, setPhase] = useState("idle");
+  const [revalidateHint, setRevalidateHint] = useState(false);
   const [validData, setValidData] = useState(null);
   const [validatedPayload, setValidatedPayload] = useState(null);
   const validation = useMutation((payload) => validateMove(cls.id, payload));
@@ -450,7 +453,9 @@ function MoveDialog({ cls, days, periods, rooms, classes, open, onOpenChange, on
   function handleDestinationChange(setter) {
     return (value) => {
       setter(value);
-      // The validated payload no longer matches: force re-validation.
+      // The validated payload no longer matches: force re-validation and
+      // say so explicitly — the previous result must not look reusable.
+      if (phase !== "idle") setRevalidateHint(true);
       setPhase("idle");
       setValidData(null);
       setValidatedPayload(null);
@@ -462,6 +467,7 @@ function MoveDialog({ cls, days, periods, rooms, classes, open, onOpenChange, on
   async function handleValidate() {
     if (!canValidate || !destinationPayload) return;
     apply.reset();
+    setRevalidateHint(false);
     const result = await validation.execute(destinationPayload);
     if (result.ok) {
       if (result.data.noop) {
@@ -524,7 +530,9 @@ function MoveDialog({ cls, days, periods, rooms, classes, open, onOpenChange, on
           </section>
 
           <section aria-label="Destination" className="space-y-3">
-            <h3 className="text-sm font-semibold text-ink">Destination</h3>
+            <h3 className="text-sm font-semibold text-ink">
+              Destination — {cls.length} {cls.length === 1 ? "period" : "periods"} block (moves together, cannot be resized)
+            </h3>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <div>
                 <Label htmlFor="move-day">Day</Label>
@@ -577,6 +585,11 @@ function MoveDialog({ cls, days, periods, rooms, classes, open, onOpenChange, on
                 {localError}
               </p>
             ) : null}
+            {revalidateHint ? (
+              <p className="text-xs font-medium text-brass-dark" role="status">
+                Destination changed — the previous validation no longer applies. Choose Validate Move again.
+              </p>
+            ) : null}
             {destinationPayload ? (
               <FootprintPreview
                 day={destinationPayload.day}
@@ -592,7 +605,15 @@ function MoveDialog({ cls, days, periods, rooms, classes, open, onOpenChange, on
             {phase === "idle" ? (
               <MutationError error={validation.error && validationFailures.length === 0 ? validation.error : null} />
             ) : null}
-            {showInvalid ? <FailureList failures={validationFailures} title="Move is not valid — nothing was changed" /> : null}
+            {showInvalid ? (
+              <>
+                <FailureList failures={validationFailures} title="Move is not valid — nothing was changed" />
+                <p className="text-xs text-muted-foreground">
+                  What to try next: pick a different day, start period, or room — then choose Validate
+                  Move again. The backend decides; this preview never moves anything.
+                </p>
+              </>
+            ) : null}
             {phase === "valid" && validData ? (
               <Alert variant="success">
                 <CircleCheck aria-hidden="true" />
@@ -715,6 +736,11 @@ function DetailsDialog({ cls, periods, open, onOpenChange }) {
           </Alert>
         )}
         <DialogFooter>
+          {locked ? (
+            <Button asChild variant="outline">
+              <Link to="/timetable/locked-blocks">View Fixed Blocks</Link>
+            </Button>
+          ) : null}
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Close
           </Button>
@@ -731,6 +757,9 @@ export function TimetableEditorPage() {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [groupFilter, setGroupFilter] = useState("all");
   const [facultyFilter, setFacultyFilter] = useState("all");
+  const [dayFilter, setDayFilter] = useState("all");
+  // Informational today marker only (computed once — no timer, no refetch).
+  const today = useMemo(() => todayAbbrev(), []);
 
   const remoteData = query.data;
   const classes = useMemo(() => remoteData?.classes ?? [], [remoteData]);
@@ -753,10 +782,25 @@ export function TimetableEditorPage() {
       classes.filter(
         (c) =>
           (groupFilter === "all" || groupLabel(c) === groupFilter) &&
-          (facultyFilter === "all" || c.faculty === facultyFilter)
+          (facultyFilter === "all" || c.faculty === facultyFilter) &&
+          (dayFilter === "all" || c.day === dayFilter)
       ),
-    [classes, groupFilter, facultyFilter]
+    [classes, groupFilter, facultyFilter, dayFilter]
   );
+  // The day filter hides whole day columns (display-only); every move is
+  // still validated against the full schedule by the backend.
+  const shownDays = useMemo(
+    () => (dayFilter === "all" ? days : days.filter((d) => d === dayFilter)),
+    [days, dayFilter]
+  );
+  const summary = useMemo(() => summarizeEditorClasses(classes), [classes]);
+  const hasActiveFilters = groupFilter !== "all" || facultyFilter !== "all" || dayFilter !== "all";
+
+  function clearFilters() {
+    setGroupFilter("all");
+    setFacultyFilter("all");
+    setDayFilter("all");
+  }
 
   function handleSelect(cls) {
     setSelectedId(cls.id);
@@ -827,6 +871,12 @@ export function TimetableEditorPage() {
     >
       <div className="space-y-4">
         <EditorLegend />
+        <p className="text-xs text-muted-foreground" role="status">
+          {summary.total} {summary.total === 1 ? "class" : "classes"} · {summary.movable} movable ·{" "}
+          {summary.fixed} fixed · {summary.spec} specialization
+          {summary.multi > 0 ? ` · ${summary.multi} multi-period` : ""}
+          {today != null && days.includes(today) ? ` · Today: ${today}` : ""}
+        </p>
         {empty ? (
           <EmptyState
             icon={CalendarDays}
@@ -845,7 +895,7 @@ export function TimetableEditorPage() {
               title="View controls"
               description="Filters only change what the grid shows — every move is still validated against the full schedule by the backend."
             >
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <div>
                   <Label htmlFor="editor-group-filter">Section / group</Label>
                   <Select value={groupFilter} onValueChange={setGroupFilter}>
@@ -878,7 +928,24 @@ export function TimetableEditorPage() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="flex items-end">
+                <div>
+                  <Label htmlFor="editor-day-filter">Day</Label>
+                  <Select value={dayFilter} onValueChange={setDayFilter}>
+                    <SelectTrigger id="editor-day-filter" className="mt-1.5">
+                      <SelectValue placeholder="All days" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All days</SelectItem>
+                      {days.map((d) => (
+                        <SelectItem key={d} value={d}>
+                          {d}
+                          {d === today ? " (today)" : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex items-end gap-2">
                   <p className="text-sm text-muted-foreground" role="status">
                     Showing {visible.length} of {classes.length}{" "}
                     {classes.length === 1 ? "class" : "classes"}
@@ -888,6 +955,11 @@ export function TimetableEditorPage() {
                       </>
                     ) : null}
                   </p>
+                  {hasActiveFilters ? (
+                    <Button variant="ghost" size="sm" onClick={clearFilters}>
+                      Clear
+                    </Button>
+                  ) : null}
                 </div>
               </div>
             </Panel>
@@ -895,15 +967,21 @@ export function TimetableEditorPage() {
               <EmptyState
                 icon={CalendarDays}
                 title="No classes match these filters"
-                description="Loosen the section/group or faculty filter to see classes again."
+                description="The timetable exists — loosen the section, faculty, or day filter to see classes again."
+                action={
+                  <Button variant="outline" className="mt-2" onClick={clearFilters}>
+                    Clear all filters
+                  </Button>
+                }
               />
             ) : (
               <EditorGrid
-                days={days}
+                days={shownDays}
                 periods={periods}
                 classes={visible}
                 selectedId={selectedId}
                 onSelect={handleSelect}
+                today={today}
               />
             )}
             <p className="text-xs text-muted-foreground">

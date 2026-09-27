@@ -10,8 +10,13 @@ const PERIOD_MIN = "132px";
  * each lane is one grid row for that day, multi-period blocks span columns
  * via `gridColumn`, and parallel sessions stack as separate rows under the
  * same day label — the same semantics as the Jinja timetable.
+ *
+ * Phase 6R: the pinned day column carries `z-index` so scrolling lane
+ * cells can no longer paint over it, and an optional informational
+ * `today` abbreviation highlights the current day row (derived from the
+ * backend day names — never fabricated; null hides the marker).
  */
-export function TimetableGrid({ periods, dayRows, labelledBy }) {
+export function TimetableGrid({ periods, dayRows, labelledBy, today }) {
   const periodCount = periods.length;
   const columns = `${DAY_COL} repeat(${periodCount}, minmax(${PERIOD_MIN}, 1fr))`;
   const minWidth = `calc(${DAY_COL} + ${periodCount} * ${PERIOD_MIN})`;
@@ -22,7 +27,7 @@ export function TimetableGrid({ periods, dayRows, labelledBy }) {
       <div className="grid gap-px bg-line" style={{ gridTemplateColumns: columns, minWidth }}>
         <div
           role="columnheader"
-          className="bg-muted px-2 py-2 text-xs font-semibold text-ink"
+          className="sticky left-0 z-30 bg-muted px-2 py-2 text-xs font-semibold text-ink"
         >
           Day / Time
         </div>
@@ -38,26 +43,37 @@ export function TimetableGrid({ periods, dayRows, labelledBy }) {
       </div>
 
       {/* One block per day; the day label spans that day's lanes. */}
-      {dayRows.map((row) => (
-        <div
-          key={row.day}
-          role="row"
-          className="grid gap-px border-t border-line bg-line"
-          style={{ gridTemplateColumns: columns, minWidth }}
-          aria-label={row.day}
-        >
+      {dayRows.map((row) => {
+        const isToday = today != null && row.day === today;
+        return (
           <div
-            role="rowheader"
-            className="flex items-center bg-steel-tint px-2 py-2 text-sm font-semibold text-ink"
-            style={{ gridRow: `1 / span ${row.lanes.length}` }}
+            key={row.day}
+            role="row"
+            className="grid gap-px border-t border-line bg-line"
+            style={{ gridTemplateColumns: columns, minWidth }}
+            aria-label={isToday ? `${row.day} (today)` : row.day}
           >
-            {row.day}
+            <div
+              role="rowheader"
+              className={cn(
+                "sticky left-0 z-10 flex items-center gap-1.5 bg-steel-tint px-2 py-2 text-sm font-semibold text-ink",
+                isToday && "bg-brass/25"
+              )}
+              style={{ gridRow: `1 / span ${row.lanes.length}` }}
+            >
+              {row.day}
+              {isToday ? (
+                <span className="rounded bg-brass px-1.5 py-0.5 text-[0.65rem] font-bold text-[#241A0C]">
+                  Today
+                </span>
+              ) : null}
+            </div>
+            {row.lanes.map((lane, laneIndex) => (
+              <LaneCells key={laneIndex} lane={lane} laneIndex={laneIndex} day={row.day} />
+            ))}
           </div>
-          {row.lanes.map((lane, laneIndex) => (
-            <LaneCells key={laneIndex} lane={lane} laneIndex={laneIndex} day={row.day} />
-          ))}
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

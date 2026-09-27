@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
 import {
   ArrowLeft,
@@ -17,6 +17,7 @@ import { Page, Panel } from "@/components/layout/page.jsx";
 import { EmptyState, PageLoading, QueryError } from "@/components/feedback/data-states.jsx";
 import { FailureList } from "@/components/feedback/mutation.jsx";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert.jsx";
+import { Badge } from "@/components/ui/badge.jsx";
 import { Button } from "@/components/ui/button.jsx";
 import {
   Dialog,
@@ -26,6 +27,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog.jsx";
+import { Label } from "@/components/ui/label.jsx";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select.jsx";
 import { useApi } from "@/hooks/use-api.js";
 import { useMutation } from "@/hooks/use-mutation.js";
 import { useToast } from "@/hooks/use-toast.js";
@@ -34,8 +43,11 @@ import { emitOnSuccess, GENERATION_DOMAINS } from "@/lib/propagation.js";
 import { exportUrl, getTimetableHome, getTimetableView, runScheduler } from "@/services/api/timetable.js";
 import { TimetableGrid } from "@/components/timetable/TimetableGrid.jsx";
 import { TimetableLegend } from "@/components/timetable/TimetableLegend.jsx";
+import { filterDayRows, summarizeDayRows, todayAbbrev } from "@/components/timetable/timetable-helpers.js";
 
 const VALID_VIEWS = ["section", "faculty", "room"];
+
+const VIEW_LABELS = { section: "Section", faculty: "Faculty", room: "Room" };
 
 /** True when at least one scheduled block exists anywhere in the rows. */
 function hasScheduledClasses(dayRows) {
@@ -268,6 +280,21 @@ export function TimetableViewPage() {
   const isValidView = VALID_VIEWS.includes(view);
   const fetcher = useCallback(() => getTimetableView(view, id), [view, id]);
   const { data, error, isLoading, retry } = useApi(fetcher, ["schedule"]);
+  // Phase 6R: display-only day filter + informational today marker.
+  // Both derive from the already-fetched payload: no extra GET, no
+  // invalidation, no mutation. `today` is computed once (no timer).
+  const [dayFilter, setDayFilter] = useState("all");
+  const today = useMemo(() => todayAbbrev(), []);
+  // A new view/id reuses this component: reset the display filter so a
+  // previous day choice never masquerades as missing data. Render-time
+  // state adjustment (the sanctioned alternative to a reset effect) —
+  // local state only, no GET, no invalidation.
+  const [filterScope, setFilterScope] = useState(null);
+  const scope = `${view}/${id}`;
+  if (filterScope !== scope) {
+    setFilterScope(scope);
+    setDayFilter("all");
+  }
 
   if (!isValidView) {
     return (
@@ -309,8 +336,34 @@ export function TimetableViewPage() {
 
   const periods = data.periods ?? [];
   const dayRows = data.day_rows ?? [];
-  const multiLaneDays = dayRows.filter((row) => (row.lanes?.length ?? 0) > 1).map((row) => row.day);
-  const empty = !hasScheduledClasses(dayRows);
+  const days = data.days ?? dayRows.map((row) => row.day);
+  // Distinguish "no timetable exists" from "timetable exists but this
+  // day filter matches nothing": the filter only hides rows locally.
+  const hasAny = hasScheduledClasses(dayRows);
+  // Plain calls (not hooks): this block runs after the loading/error
+  // early returns above, so hooks would be conditional here. The dataset
+  // is one view's grid — recomputation per render is negligible.
+  const visibleRows = filterDayRows(dayRows, dayFilter);
+  const summary = summarizeDayRows(dayRows);
+  const multiLaneDays = visibleRows
+    .filter((row) => (row.lanes?.length ?? 0) > 1)
+    .map((row) => row.day);
+  const filteredEmpty = !hasScheduledClasses(visibleRows);
+  const todayShown = today != null && days.includes(today);
+
+  const contextBits = [
+    `${days.length} ${days.length === 1 ? "day" : "days"} × ${periods.length} ${periods.length === 1 ? "period" : "periods"}`,
+    `${summary.total} ${summary.total === 1 ? "class" : "classes"}`,
+  ];
+  if (summary.multi > 0) {
+    contextBits.push(`${summary.multi} multi-period`);
+  }
+  if (summary.fixed > 0) {
+    contextBits.push(`${summary.fixed} fixed`);
+  }
+  if (summary.spec > 0) {
+    contextBits.push(`${summary.spec} specialization`);
+  }
 
   return (
     <Page
@@ -319,6 +372,12 @@ export function TimetableViewPage() {
       breadcrumbs={[{ label: "Timetable", to: "/timetable" }, { label: data.title }]}
       actions={
         <>
+          <Button asChild variant="outline" size="sm">
+            <Link to="/timetable/editor">
+              <Pencil aria-hidden="true" />
+              Open in Editor
+            </Link>
+          </Button>
           <Button asChild variant="outline" size="sm">
             <a href={exportUrl(view, id, "xlsx")}>
               <Download aria-hidden="true" />
@@ -341,19 +400,76 @@ export function TimetableViewPage() {
       }
     >
       <div className="space-y-4">
+        <div className="flex flex-wrap items-center gap-2" aria-label="Timetable context">
+          <Badge variant="secondary">{VIEW_LABELS[view] ?? view} view</Badge>
+          <span className="text-xs text-muted-foreground" role="status">
+            {contextBits.join(" · ")}
+            {todayShown ? ` · Today: ${today}` : null}
+          </span>
+        </div>
         <TimetableLegend />
-        {empty ? (
+        {days.length > 1 ? (
+          <div className="flex flex-wrap items-end gap-3">
+            <div>
+              <Label htmlFor="timetable-day-filter">Day</Label>
+              <Select value={dayFilter} onValueChange={setDayFilter}>
+                <SelectTrigger id="timetable-day-filter" className="mt-1.5 w-[180px]">
+                  <SelectValue placeholder="All days" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All days</SelectItem>
+                  {days.map((day) => (
+                    <SelectItem key={day} value={day}>
+                      {day}
+                      {day === today ? " (today)" : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <p className="pb-2 text-xs text-muted-foreground">
+              Display only — filtering never changes the timetable.
+            </p>
+          </div>
+        ) : null}
+        {!hasAny ? (
           <EmptyState
             icon={CalendarDays}
             title="No scheduled classes yet"
-            description="Nothing is placed for this view. Generate the timetable once scheduling ships, then return here."
+            description="Nothing is placed for this view. Generate the timetable first, or check that sections, assignments, and configuration are in place."
+            action={
+              <div className="mt-2 flex flex-wrap justify-center gap-2">
+                <Button asChild>
+                  <Link to="/timetable">Go to timetable generation</Link>
+                </Button>
+                <Button asChild variant="outline">
+                  <Link to="/assignments">Review teaching assignments</Link>
+                </Button>
+              </div>
+            }
+          />
+        ) : filteredEmpty ? (
+          <EmptyState
+            icon={CalendarDays}
+            title={`No classes on ${dayFilter}`}
+            description="This timetable exists — the selected day just has nothing scheduled for this view."
+            action={
+              <Button variant="outline" className="mt-2" onClick={() => setDayFilter("all")}>
+                Show all days
+              </Button>
+            }
           />
         ) : (
           <>
             <h2 id="timetable-grid-heading" className="sr-only">
               {data.title} grid
             </h2>
-            <TimetableGrid periods={periods} dayRows={dayRows} labelledBy="timetable-grid-heading" />
+            <TimetableGrid
+              periods={periods}
+              dayRows={visibleRows}
+              labelledBy="timetable-grid-heading"
+              today={today}
+            />
             {multiLaneDays.length > 0 ? (
               <p className="text-xs text-muted-foreground">
                 {multiLaneDays.join(", ")} {multiLaneDays.length === 1 ? "shows" : "show"} more than one
