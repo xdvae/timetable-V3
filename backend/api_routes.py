@@ -1945,7 +1945,7 @@ def api_specialization_membership_delete(sid):
 # ------------------------------------------------------------------ wiring
 def init_api(app, login_manager):
     """Register the /api/* blueprint. The only app.py integration point."""
-    from werkzeug.exceptions import NotFound
+    from werkzeug.exceptions import MethodNotAllowed, NotFound
 
     app.register_blueprint(api_bp)
 
@@ -1959,6 +1959,19 @@ def init_api(app, login_manager):
                 code=error_contract.NOT_FOUND,
                 message="Not found.", status=404)
         return NotFound()
+
+    @app.errorhandler(405)
+    def _api_aware_method_not_allowed(err):
+        # Phase 6U: wrong-method requests against existing /api/* routes
+        # are raised at routing time, so the blueprint 405 handler never
+        # sees them (Flask fell back to its default HTML page). API
+        # callers get the unified JSON contract instead; every other 405
+        # keeps Werkzeug's default HTML page, exactly as today.
+        if (request.path or "").startswith("/api/"):
+            return error_contract.error_response(
+                code=error_contract.METHOD_NOT_ALLOWED,
+                message="Method not allowed.", status=405)
+        return MethodNotAllowed()
 
     @login_manager.unauthorized_handler
     def _api_aware_unauthorized():
