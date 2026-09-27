@@ -317,8 +317,13 @@ Local development uses SQLite. The default file lives under `backend/instance/` 
 `SQLALCHEMY_DATABASE_URI` in `backend/app.py`; `DATABASE_URL` overrides it).
 `backend/instance/timetable.db` is currently tracked in Git as the project's demo state — do not
 delete it, and point `DATABASE_URL` elsewhere if you want a scratch database. Any *new* `*.db` /
-`*.sqlite` files are ignored by the root `.gitignore`. Schema changes go through `backend/models.py`;
-there is no migration tooling — deleting the SQLite file and re-running recreates an empty schema.
+`*.sqlite` files are ignored by the root `.gitignore`. Schema changes go through `backend/models.py`
+plus the versioned runner in `backend/migrate.py` (revisions in
+`backend/migrations/versions/`, linear chain `6c → 6e → 6f → 6j`). To bring an
+older database file up to the current schema, copy it aside first and run
+`python -m backend.migrate --db <path-to-copy.db> upgrade` — never point `--db`
+at the live file unless you pass `--allow-live` explicitly. Deleting the SQLite
+file and re-running recreates an empty schema (losing all data; prefer migrating).
 
 ## CSV Import
 

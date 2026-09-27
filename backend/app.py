@@ -167,12 +167,47 @@ def export_view(view, obj_id, fmt):
 DIST_DIR = os.path.join(_ROOT_DIR, "frontend", "dist")
 
 
+def api_catchall_response():
+    """JSON 404/405 for ``/api/*`` paths that reach the SPA catch-all.
+
+    Phase 6V: the GET catch-all below would otherwise shadow
+    routing-level 405s — a wrong-method GET against a POST-only
+    endpoint (e.g. ``GET /api/schedule/run``) reads as 404 instead of
+    the unified 405 contract from Phase 6U. When the path exists under
+    a non-GET method, keep the 405 contract; otherwise it is genuinely
+    unknown (404). Non-API paths never reach here.
+    """
+    from flask import current_app
+    from werkzeug.exceptions import MethodNotAllowed, NotFound
+    from backend import errors as error_contract
+    path = request.path or ""
+    # This helper only runs when the GET catch-all was selected, so no
+    # GET rule matches `path`. A POST match proves a POST-only endpoint
+    # lives here (wrong-method GET → 405). A bare MethodNotAllowed only
+    # reflects the catch-all's own GET/HEAD/OPTIONS — anything beyond
+    # those proves a real endpoint under another method.
+    try:
+        current_app.url_map.bind_to_environ(request.environ).match(
+            path, method="POST")
+        exists_under_other_method = True
+    except MethodNotAllowed as exc:
+        exists_under_other_method = bool(
+            set(exc.valid_methods or ()) - {"GET", "HEAD", "OPTIONS"})
+    except NotFound:
+        exists_under_other_method = False
+    if exists_under_other_method:
+        return error_contract.error_response(
+            code=error_contract.METHOD_NOT_ALLOWED,
+            message="Method not allowed.", status=405)
+    abort(404)  # unmatched API URLs stay machine-readable (see init_api)
+
+
 @app.route("/", defaults={"path": ""}, methods=["GET"])
 @app.route("/<path:path>", methods=["GET"])
 def serve_react(path):
     """Serve the React production build with SPA fallback."""
     if (request.path or "").startswith("/api/"):
-        abort(404)  # unmatched API URLs stay machine-readable (see init_api)
+        return api_catchall_response()
     if not os.path.isdir(DIST_DIR):
         abort(404)
     base = os.path.abspath(DIST_DIR)

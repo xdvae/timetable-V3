@@ -8,6 +8,10 @@ stay valid; new 6E rows always set it. No existing table is altered
 beyond ADD COLUMN, no row is touched.
 
 upgrade(conn) / downgrade(conn) take a stdlib sqlite3 connection.
+
+Phase 6V: ``upgrade()`` is idempotent — the column is added only when
+missing, so hybrid databases (``locked_block`` present without the link,
+as in the checked-in demo database) are repaired instead of crashing.
 """
 revision = "6e_locked_assignment"
 down_revision = "6c_additive_schema"
@@ -23,8 +27,8 @@ DOWNGRADE_DDL = [
 
 
 def upgrade(conn):
-    for stmt in UPGRADE_DDL:
-        conn.execute(stmt)
+    from backend.migrations.versions._helpers import ensure_column
+    ensure_column(conn, "locked_block", "assignment_id", UPGRADE_DDL[0])
 
 
 def downgrade(conn):

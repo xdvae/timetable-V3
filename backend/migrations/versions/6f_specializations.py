@@ -8,6 +8,9 @@ assignments set it and leave section_id/lab_group_id NULL. A supporting
 index speeds scheduler/validator lookups. No existing table is altered
 beyond ADD COLUMN, no row is touched, no IDs change.
 
+Phase 6V: ``upgrade()`` is idempotent — the column is added only when
+missing, so hybrid databases are repaired instead of crashing.
+
 upgrade(conn) / downgrade(conn) take a stdlib sqlite3 connection.
 """
 revision = "6f_specializations"
@@ -26,8 +29,10 @@ DOWNGRADE_DDL = [
 
 
 def upgrade(conn):
-    for stmt in UPGRADE_DDL:
-        conn.execute(stmt)
+    from backend.migrations.versions._helpers import ensure_column
+    ensure_column(conn, "teaching_assignment", "specialization_id",
+                  UPGRADE_DDL[0])
+    conn.execute(UPGRADE_DDL[1])
 
 
 def downgrade(conn):
