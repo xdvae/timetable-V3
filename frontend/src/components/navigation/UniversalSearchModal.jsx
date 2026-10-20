@@ -60,16 +60,16 @@ export function UniversalSearchModal({ open, onOpenChange }) {
   // Load authoritative data when modal opens if not already cached
   useEffect(() => {
     if (!open) {
-      setQuery("");
-      setDebouncedQuery("");
-      setSelectedIndex(0);
       return;
     }
 
     let isSubscribed = true;
     if (!dataCache) {
-      setIsLoading(true);
-      setError(null);
+      queueMicrotask(() => {
+        if (!isSubscribed) return;
+        setIsLoading(true);
+        setError(null);
+      });
 
       Promise.allSettled([
         getRooms(),
@@ -334,10 +334,7 @@ export function UniversalSearchModal({ open, onOpenChange }) {
     return list;
   }, [groupedResults]);
 
-  // Adjust selection when results change
-  useEffect(() => {
-    setSelectedIndex(0);
-  }, [flatResults.length, debouncedQuery]);
+  const safeSelectedIndex = flatResults.length > 0 ? Math.min(selectedIndex, flatResults.length - 1) : 0;
 
   const handleSelect = useCallback(
     (item) => {
@@ -358,15 +355,15 @@ export function UniversalSearchModal({ open, onOpenChange }) {
         setSelectedIndex((prev) => (flatResults.length > 0 ? (prev - 1 + flatResults.length) % flatResults.length : 0));
       } else if (e.key === "Enter") {
         e.preventDefault();
-        if (flatResults[selectedIndex]) {
-          handleSelect(flatResults[selectedIndex]);
+        if (flatResults[safeSelectedIndex]) {
+          handleSelect(flatResults[safeSelectedIndex]);
         }
       } else if (e.key === "Escape") {
         e.preventDefault();
         onOpenChange(false);
       }
     },
-    [flatResults, selectedIndex, handleSelect, onOpenChange]
+    [flatResults, safeSelectedIndex, handleSelect, onOpenChange]
   );
 
   if (!open) return null;
@@ -395,6 +392,8 @@ export function UniversalSearchModal({ open, onOpenChange }) {
             placeholder="Search faculty, subjects, rooms, classes, pages..."
             value={query}
             onValueChange={setQuery}
+            onChange={(e) => setQuery(e.target.value)}
+            onInput={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
             collapsedWidth={140}
             expandedWidth={440}
@@ -447,7 +446,7 @@ export function UniversalSearchModal({ open, onOpenChange }) {
                       <div className="space-y-0.5">
                         {group.items.map((item) => {
                           const itemIndex = currentIndexTracker++;
-                          const isSelected = itemIndex === selectedIndex;
+                          const isSelected = itemIndex === safeSelectedIndex;
 
                           return (
                             <div

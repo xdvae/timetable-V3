@@ -1,21 +1,20 @@
 import { useState, useEffect } from "react";
 import { Link, Outlet } from "react-router";
-import { CalendarRange, Menu, Search } from "lucide-react";
+import { CalendarRange, Search } from "lucide-react";
 
-import { SidebarBody } from "@/components/navigation/sidebar.jsx";
+import { AppSidebar } from "@/components/navigation/sidebar.jsx";
 import { UniversalSearchModal } from "@/components/navigation/UniversalSearchModal.jsx";
 import { Button } from "@/components/ui/button.jsx";
-import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet.jsx";
-import { useIsMobile } from "@/hooks/use-media-query.js";
+import { SidebarProvider, SidebarTrigger, SidebarInset } from "@/components/ui/sidebar.jsx";
 
 /**
- * Shared application shell: persistent 246px sidebar on desktop,
- * off-canvas drawer + hamburger on mobile, content outlet otherwise.
- * Houses the universal search trigger and modal with Ctrl+K / Cmd+K shortcut.
+ * Shared application shell using official shadcn Sidebar components:
+ * - SidebarProvider manages collapsible state, mobile drawer, and keyboard shortcut (Ctrl/Cmd+B).
+ * - AppSidebar renders shadcn Sidebar in 'icon' collapsible mode.
+ * - SidebarTrigger is positioned prominently in the sticky top header for seamless collapsing.
+ * - Houses the Universal Gooey Search trigger and modal with Ctrl+K / Cmd+K shortcut.
  */
 export function AppShell() {
-  const isMobile = useIsMobile();
-  const [drawerOpen, setDrawerOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
 
   // Global keyboard shortcut for universal search: Ctrl+K / Cmd+K
@@ -31,58 +30,56 @@ export function AppShell() {
   }, []);
 
   return (
-    <div className="flex min-h-svh bg-paper">
-      {!isMobile ? (
-        <aside className="sticky top-0 hidden h-svh w-[246px] shrink-0 bg-ink text-[#C9D2E5] lg:block" aria-label="Sidebar">
-          <SidebarBody onOpenSearch={() => setSearchOpen(true)} />
-        </aside>
-      ) : null}
+    <SidebarProvider defaultOpen={true}>
+      <div className="flex min-h-svh w-full bg-paper">
+        {/* Official shadcn Sidebar with icon collapsible rail and mobile drawer support */}
+        <AppSidebar onOpenSearch={() => setSearchOpen(true)} />
 
-      <div className="min-w-0 flex-1">
-        {isMobile ? (
-          <div className="sticky top-0 z-30 flex items-center justify-between border-b border-line bg-panel px-4 py-3">
-            <div className="flex items-center gap-3">
-              <Button variant="outline" size="sm" onClick={() => setDrawerOpen(true)} aria-label="Open navigation menu">
-                <Menu aria-hidden="true" />
-                Menu
-              </Button>
-              <Link to="/" className="flex items-center gap-2 font-display font-semibold text-ink no-underline">
+        {/* Content area that fluidly resizes when sidebar expands or collapses */}
+        <SidebarInset className="flex flex-1 flex-col bg-paper min-w-0">
+          {/* Top navigation bar with SidebarTrigger and Universal Search */}
+          <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center justify-between border-b border-line bg-panel/95 px-4 backdrop-blur-sm transition-[width,height] ease-linear">
+            <div className="flex items-center gap-2">
+              <SidebarTrigger
+                className="size-8 text-ink-soft hover:bg-black/5 hover:text-ink focus-visible:ring-2 focus-visible:ring-brass"
+                aria-label="Toggle navigation sidebar"
+              />
+              <div className="h-4 w-px bg-line/80 mx-1 md:hidden" aria-hidden="true" />
+              <Link
+                to="/"
+                className="flex items-center gap-2 font-display font-semibold text-ink no-underline md:hidden"
+              >
                 <CalendarRange className="size-5 text-brass" aria-hidden="true" />
-                UniSchedule
+                <span>UniSchedule</span>
               </Link>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setSearchOpen(true)}
-              aria-label="Open universal search"
-              className="gap-1.5"
-            >
-              <Search className="size-4" aria-hidden="true" />
-              <span className="sr-only sm:not-sr-only">Search</span>
-            </Button>
-          </div>
-        ) : null}
 
-        <main>
-          <Outlet />
-        </main>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setSearchOpen(true)}
+                aria-label="Open universal search (Ctrl+K)"
+                className="gap-2 border-line bg-white text-ink-soft hover:bg-neutral-50 hover:text-ink shadow-xs"
+              >
+                <Search className="size-3.5 text-ink-soft" aria-hidden="true" />
+                <span className="hidden sm:inline text-xs font-normal text-ink-soft">Search UniSchedule...</span>
+                <kbd className="hidden sm:inline-flex items-center rounded border border-line bg-muted px-1.5 py-0.5 text-[10px] font-mono text-ink-soft">
+                  ⌘K
+                </kbd>
+              </Button>
+            </div>
+          </header>
+
+          {/* Page content */}
+          <main className="flex-1 p-0 min-w-0">
+            <Outlet />
+          </main>
+        </SidebarInset>
+
+        {/* Universal Search Modal */}
+        <UniversalSearchModal open={searchOpen} onOpenChange={setSearchOpen} />
       </div>
-
-      <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
-        <SheetContent side="left" className="w-[280px] border-r-0 bg-ink p-0 text-[#C9D2E5] sm:max-w-xs">
-          <SheetTitle className="sr-only">Navigation</SheetTitle>
-          <SidebarBody
-            onNavigate={() => setDrawerOpen(false)}
-            onOpenSearch={() => {
-              setDrawerOpen(false);
-              setSearchOpen(true);
-            }}
-          />
-        </SheetContent>
-      </Sheet>
-
-      <UniversalSearchModal open={searchOpen} onOpenChange={setSearchOpen} />
-    </div>
+    </SidebarProvider>
   );
 }

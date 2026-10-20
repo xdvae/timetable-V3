@@ -73,13 +73,14 @@ export function GooeyInput({
   defaultOpen = false,
   onOpenChange,
   onKeyDown,
+  onChange,
+  onInput,
   disabled = false
 }) {
   const reactId = useId();
   const safeId = reactId.replace(/:/g, "");
   const filterId = `gooey-filter-${safeId}`;
   const iconLayoutId = `gooey-input-icon-${safeId}`;
-  const inputLayoutId = `gooey-input-field-${safeId}`;
 
   const inputRef = useRef(null);
   const prevExpandedRef = useRef(false);
@@ -121,6 +122,16 @@ export function GooeyInput({
     prevExpandedRef.current = isExpanded;
   }, [isExpanded, setSearchText]);
 
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    const onNativeChange = (e) => {
+      setSearchText(e.target.value);
+    };
+    el.addEventListener("change", onNativeChange);
+    return () => el.removeEventListener("change", onNativeChange);
+  }, [setSearchText]);
+
   const buttonVariants = useMemo(
     () => ({
       collapsed: { width: collapsedWidth, marginLeft: 0 },
@@ -136,8 +147,17 @@ export function GooeyInput({
   const handleChange = useCallback(
     (e) => {
       setSearchText(e.target.value);
+      onChange?.(e);
     },
-    [setSearchText],
+    [setSearchText, onChange],
+  );
+
+  const handleInput = useCallback(
+    (e) => {
+      setSearchText(e.target.value);
+      onInput?.(e);
+    },
+    [setSearchText, onInput],
   );
 
   const handleBlur = useCallback(() => {
@@ -171,12 +191,11 @@ export function GooeyInput({
           animate={isExpanded ? "expanded" : "collapsed"}
           transition={transition}
         >
-          <button
-            type="button"
-            disabled={disabled}
+          <div
             onClick={handleExpand}
             className={cn(
-              "flex h-10 w-full cursor-pointer items-center justify-center gap-2 rounded-full px-4 text-sm font-medium outline-none transition-[color,box-shadow] focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50",
+              "flex h-10 w-full cursor-pointer items-center justify-center gap-2 rounded-full px-4 text-sm font-medium outline-none transition-[color,box-shadow] focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-background",
+              disabled && "pointer-events-none opacity-50",
               surfaceClass,
               classNames?.trigger,
             )}
@@ -184,15 +203,15 @@ export function GooeyInput({
             {!isExpanded ? (
               <SearchIcon layoutId={iconLayoutId} />
             ) : null}
-            <motion.input
+            <input
               id={id}
-              layoutId={inputLayoutId}
               ref={inputRef}
               type="search"
               enterKeyHint="search"
               autoComplete="off"
               value={searchText}
               onChange={handleChange}
+              onInput={handleInput}
               onBlur={handleBlur}
               onKeyDown={onKeyDown}
               disabled={disabled || !isExpanded}
@@ -205,7 +224,7 @@ export function GooeyInput({
                 classNames?.input,
               )}
             />
-          </button>
+          </div>
         </motion.div>
 
         <motion.div
