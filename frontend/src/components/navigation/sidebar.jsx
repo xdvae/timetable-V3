@@ -1,5 +1,5 @@
 import { Link, NavLink, useNavigate } from "react-router";
-import { CalendarRange, CircleUserRound } from "lucide-react";
+import { CalendarRange, CircleUserRound, Search } from "lucide-react";
 
 import { useAuth } from "@/hooks/use-auth.js";
 import { NAV_GROUPS } from "@/components/navigation/nav-config.js";
@@ -60,9 +60,9 @@ function SidebarNavList({ onNavigate }) {
   );
 }
 
-function SidebarBrand({ onNavigate }) {
+function SidebarBrand({ onNavigate, onOpenSearch }) {
   return (
-    <div className="mb-6">
+    <div className="mb-4">
       <Link
         to="/"
         onClick={onNavigate}
@@ -72,6 +72,26 @@ function SidebarBrand({ onNavigate }) {
         UniSchedule
       </Link>
       <span className="mt-0.5 block text-xs text-[#8A96B5]">University scheduling</span>
+
+      {onOpenSearch ? (
+        <button
+          type="button"
+          onClick={() => {
+            onNavigate?.();
+            onOpenSearch();
+          }}
+          className="mt-3 flex w-full items-center justify-between rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs text-[#C9D2E5] transition-colors hover:bg-white/10 hover:text-white focus-visible:ring-2 focus-visible:ring-brass"
+          aria-label="Open universal search (Ctrl+K)"
+        >
+          <span className="flex items-center gap-2">
+            <Search className="size-3.5 text-[#8A96B5]" aria-hidden="true" />
+            <span>Search UniSchedule...</span>
+          </span>
+          <kbd className="rounded border border-white/15 bg-white/10 px-1 py-0.5 text-[10px] text-[#C9D2E5]">
+            ⌘K
+          </kbd>
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -90,10 +110,10 @@ function SidebarFooter() {
 }
 
 /** Shared sidebar body used by both the desktop panel and the mobile drawer. */
-export function SidebarBody({ onNavigate }) {
+export function SidebarBody({ onNavigate, onOpenSearch }) {
   return (
     <div className="flex h-full flex-col overflow-y-auto p-4">
-      <SidebarBrand onNavigate={onNavigate} />
+      <SidebarBrand onNavigate={onNavigate} onOpenSearch={onOpenSearch} />
       <div className="flex-1">
         <SidebarNavList onNavigate={onNavigate} />
       </div>
