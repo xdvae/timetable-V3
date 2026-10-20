@@ -1,8 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import React from "react";
 import { createRoot } from "react-dom/client";
-import { MemoryRouter, Routes, Route, Link } from "react-router";
+import { MemoryRouter, Routes, Route } from "react-router";
 import { act } from "react";
 
 import { AppShell } from "@/components/layout/app-shell.jsx";

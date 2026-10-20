@@ -164,6 +164,15 @@
     background-color: var(--signal-tint);
     color: var(--signal);
   }
+
+  /* Hide scrollbars cleanly while preserving scroll capability */
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
 }
 /*
  ---break---

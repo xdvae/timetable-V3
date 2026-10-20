@@ -28,7 +28,7 @@ import { cn } from "@/lib/utils.js";
 export function AppSidebar({ onOpenSearch }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
-  const { setOpenMobile, state } = useSidebar();
+  const { setOpenMobile } = useSidebar();
 
   const handleLogout = async () => {
     setOpenMobile(false);
@@ -39,24 +39,24 @@ export function AppSidebar({ onOpenSearch }) {
   return (
     <Sidebar collapsible="icon" className="border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
       {/* Header: UniSchedule Branding and Optional Search quick-button */}
-      <ShadcnSidebarHeader className="p-3">
-        <SidebarMenu>
-          <SidebarMenuItem>
+      <ShadcnSidebarHeader className="p-3 group-data-[collapsible=icon]:p-2 group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:flex-col group-data-[collapsible=icon]:items-center">
+        <SidebarMenu className="group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:justify-center">
+          <SidebarMenuItem className="group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:justify-center">
             <SidebarMenuButton
               size="lg"
               asChild
               tooltip="UniSchedule Home"
-              className="hover:bg-white/5 active:bg-white/10"
+              className="hover:bg-white/5 active:bg-white/10 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-0! group-data-[collapsible=icon]:justify-center"
             >
               <Link
                 to="/"
                 onClick={() => setOpenMobile(false)}
-                className="flex items-center gap-3 no-underline outline-none focus-visible:ring-2 focus-visible:ring-brass"
+                className="flex items-center gap-3 no-underline outline-none focus-visible:ring-2 focus-visible:ring-brass group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0"
               >
                 <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-brass/15 text-brass">
                   <CalendarRange className="size-5" aria-hidden="true" />
                 </div>
-                <div className="flex flex-col truncate leading-none">
+                <div className="flex flex-col truncate leading-none group-data-[collapsible=icon]:hidden">
                   <span className="font-display text-base font-semibold text-white tracking-tight">
                     UniSchedule
                   </span>
@@ -69,68 +69,66 @@ export function AppSidebar({ onOpenSearch }) {
 
         {/* Search quick button */}
         {onOpenSearch ? (
-          <div className="mt-1 group-data-[collapsible=icon]:hidden">
-            <button
-              type="button"
-              onClick={() => {
-                setOpenMobile(false);
-                onOpenSearch();
-              }}
-              className="flex w-full items-center justify-between rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs text-[#C9D2E5] transition-colors hover:bg-white/10 hover:text-white focus-visible:ring-2 focus-visible:ring-brass"
-              aria-label="Open universal search (Ctrl+K)"
-            >
-              <span className="flex items-center gap-2">
-                <Search className="size-3.5 text-[#8A96B5]" aria-hidden="true" />
-                <span className="truncate">Search UniSchedule...</span>
-              </span>
-              <kbd className="rounded border border-white/15 bg-white/10 px-1 py-0.5 text-[10px] text-[#C9D2E5]">
-                ⌘K
-              </kbd>
-            </button>
-          </div>
-        ) : null}
-
-        {/* Collapsed Search Icon Trigger Button */}
-        {onOpenSearch && state === "collapsed" ? (
-          <SidebarMenu className="hidden group-data-[collapsible=icon]:flex">
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                onClick={() => onOpenSearch()}
-                tooltip="Search (Ctrl+K)"
+          <>
+            <div className="mt-1 group-data-[collapsible=icon]:hidden">
+              <button
+                type="button"
+                onClick={() => {
+                  setOpenMobile(false);
+                  onOpenSearch();
+                }}
+                className="flex w-full items-center justify-between rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs text-[#C9D2E5] transition-colors hover:bg-white/10 hover:text-white focus-visible:ring-2 focus-visible:ring-brass"
                 aria-label="Open universal search (Ctrl+K)"
-                className="justify-center hover:bg-white/10 hover:text-white"
               >
-                <Search className="size-4 text-[#8A96B5]" aria-hidden="true" />
-                <span className="sr-only">Search</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          </SidebarMenu>
+                <span className="flex items-center gap-2">
+                  <Search className="size-3.5 text-[#8A96B5]" aria-hidden="true" />
+                  <span className="truncate">Search UniSchedule...</span>
+                </span>
+                <kbd className="rounded border border-white/15 bg-white/10 px-1 py-0.5 text-[10px] text-[#C9D2E5]">
+                  ⌘K
+                </kbd>
+              </button>
+            </div>
+
+            {/* Collapsed Search Icon Trigger Button */}
+            <SidebarMenu className="hidden group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:justify-center">
+              <SidebarMenuItem className="group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:justify-center">
+                <SidebarMenuButton
+                  onClick={() => onOpenSearch()}
+                  tooltip="Search (Ctrl+K)"
+                  aria-label="Open universal search (Ctrl+K)"
+                  className="justify-center hover:bg-white/10 hover:text-white group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-0! group-data-[collapsible=icon]:justify-center"
+                >
+                  <Search className="size-4 text-[#8A96B5]" aria-hidden="true" />
+                  <span className="sr-only">Search</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </>
         ) : null}
       </ShadcnSidebarHeader>
 
-      <SidebarSeparator />
-
       {/* Main Nav Content grouped by section */}
-      <SidebarContent className="px-2 py-1">
+      <SidebarContent className="px-2 pt-1 pb-2 group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:py-2">
         {NAV_GROUPS.map((group) => {
           // If this group is Account, we will render it with special account controls or in the menu
           return (
-            <SidebarGroup key={group.label} className="py-1">
-              <SidebarGroupLabel className="px-2 text-[0.68rem] font-semibold tracking-[0.08em] text-[#7583A6] uppercase">
+            <SidebarGroup key={group.label} className="py-1 group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:py-1">
+              <SidebarGroupLabel className="px-2 text-[0.68rem] font-semibold tracking-[0.08em] text-[#7583A6] uppercase group-data-[collapsible=icon]:hidden">
                 {group.label}
               </SidebarGroupLabel>
-              <SidebarGroupContent>
-                <SidebarMenu>
+              <SidebarGroupContent className="group-data-[collapsible=icon]:w-full">
+                <SidebarMenu className="group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:justify-center">
                   {group.items.map((item) => {
                     const Icon = item.icon;
 
                     if (item.action === "logout") {
                       return (
-                        <SidebarMenuItem key={item.label}>
+                        <SidebarMenuItem key={item.label} className="group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:justify-center">
                           <SidebarMenuButton
                             onClick={handleLogout}
                             tooltip={item.label}
-                            className="text-[#C9D2E5] hover:bg-white/10 hover:text-white focus-visible:ring-2 focus-visible:ring-brass"
+                            className="text-[#C9D2E5] hover:bg-white/10 hover:text-white focus-visible:ring-2 focus-visible:ring-brass group-data-[collapsible=icon]:justify-center"
                           >
                             <Icon className="size-4 shrink-0 opacity-85" aria-hidden="true" />
                             <span>{item.label}</span>
@@ -140,14 +138,14 @@ export function AppSidebar({ onOpenSearch }) {
                     }
 
                     return (
-                      <SidebarMenuItem key={item.to}>
+                      <SidebarMenuItem key={item.to} className="group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:justify-center">
                         <NavLink
                           to={item.to}
                           end={item.end}
                           onClick={() => setOpenMobile(false)}
                           className={({ isActive }) =>
                             cn(
-                              "w-full block no-underline",
+                              "w-full block no-underline group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:justify-center",
                               isActive ? "pointer-events-auto" : ""
                             )
                           }
@@ -157,7 +155,7 @@ export function AppSidebar({ onOpenSearch }) {
                               isActive={isActive}
                               tooltip={item.label}
                               className={cn(
-                                "w-full text-[#C9D2E5] hover:bg-white/10 hover:text-white focus-visible:ring-2 focus-visible:ring-brass",
+                                "w-full text-[#C9D2E5] hover:bg-white/10 hover:text-white focus-visible:ring-2 focus-visible:ring-brass group-data-[collapsible=icon]:justify-center",
                                 isActive &&
                                   "bg-brass font-semibold text-[#241A0C] hover:bg-brass hover:text-[#241A0C]"
                               )}
@@ -169,7 +167,7 @@ export function AppSidebar({ onOpenSearch }) {
                                 )}
                                 aria-hidden="true"
                               />
-                              <span className="truncate">{item.label}</span>
+                              <span className="truncate group-data-[collapsible=icon]:hidden">{item.label}</span>
                             </SidebarMenuButton>
                           )}
                         </NavLink>
@@ -186,14 +184,14 @@ export function AppSidebar({ onOpenSearch }) {
       <SidebarSeparator />
 
       {/* Footer: User profile / Account summary anchored at bottom */}
-      <ShadcnSidebarFooter className="p-2">
+      <ShadcnSidebarFooter className="p-2 group-data-[collapsible=icon]:p-2 group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:flex-col group-data-[collapsible=icon]:items-center">
         {user ? (
-          <SidebarMenu>
-            <SidebarMenuItem>
+          <SidebarMenu className="group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:justify-center">
+            <SidebarMenuItem className="group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:justify-center">
               <SidebarMenuButton
                 size="lg"
                 tooltip={`Signed in as ${user.username}`}
-                className="hover:bg-white/5 active:bg-white/10 cursor-default"
+                className="hover:bg-white/5 active:bg-white/10 cursor-default group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-0! group-data-[collapsible=icon]:justify-center"
               >
                 <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-white/10 text-[#C9D2E5]">
                   <CircleUserRound className="size-5 text-[#8A96B5]" aria-hidden="true" />
@@ -228,7 +226,7 @@ export function SidebarBody({ onNavigate, onOpenSearch }) {
   };
 
   return (
-    <div className="flex h-full flex-col overflow-y-auto p-4 bg-sidebar text-sidebar-foreground">
+    <div className="flex h-full flex-col overflow-y-auto no-scrollbar p-4 bg-sidebar text-sidebar-foreground">
       {/* Brand */}
       <div className="mb-4">
         <Link
