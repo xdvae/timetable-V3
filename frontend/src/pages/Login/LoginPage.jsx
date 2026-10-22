@@ -1,25 +1,8 @@
 import { useState } from "react";
 import { Navigate, useNavigate, useSearchParams } from "react-router";
-import { CalendarRange, CircleAlert, Eye, EyeOff, LoaderCircle } from "lucide-react";
-
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card.jsx";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert.jsx";
-import { Button } from "@/components/ui/button.jsx";
-import { Input } from "@/components/ui/input.jsx";
-import { Label } from "@/components/ui/label.jsx";
+import { CalendarRange, LoaderCircle } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth.js";
 
-/**
- * Standalone sign-in page (no sidebar). Authenticates against the existing
- * Flask-Login session backend via POST /api/login — no tokens, no
- * localStorage, the session cookie is the session.
- *
- * Contract (api_routes.api_login):
- * - request JSON: { username, password } (optional ?next= query)
- * - success 200: { ok, username, redirect? } (or { ok, username, message }
- *   when already signed in)
- * - failure 401: { error: "Incorrect username or password." }
- */
 function safeNextPath(raw) {
   if (typeof raw !== "string" || !raw.startsWith("/") || raw.startsWith("//")) return "/";
   return raw;
@@ -33,110 +16,113 @@ export function LoginPage() {
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState(null);
 
   if (status === "in") {
     return <Navigate to={next} replace />;
   }
 
-  async function handleSubmit(event) {
-    event.preventDefault();
+  const handleSignIn = async (e) => {
+    if (e) e.preventDefault();
     if (isSubmitting) return;
+
+    const trimmed = username.trim();
+    if (!trimmed || !password) {
+      setError("Please enter both email/username and password.");
+      return;
+    }
+
+    setError("");
     setIsSubmitting(true);
-    setError(null);
+
     try {
-      const data = await login(username.trim(), password, next);
-      // Username is retained on failure only; clear the password either way.
+      const data = await login(trimmed, password, next);
       setPassword("");
       const target = safeNextPath(data?.redirect || next);
       navigate(target, { replace: true });
     } catch (err) {
-      setError(err);
-      // Keep the entered username so it can be corrected/resubmitted;
-      // clear the password after a failed attempt.
+      setError(err?.message || "Incorrect username or password.");
       setPassword("");
     } finally {
       setIsSubmitting(false);
     }
-  }
+  };
 
   const loadingAuth = status === "loading";
 
   return (
-    <div className="flex min-h-svh items-center justify-center bg-paper p-4">
-      <Card className="w-full max-w-[380px] border-l-[3px] border-l-brass py-8">
-        <CardHeader>
-          <div className="flex items-center gap-2">
+    <div className="min-h-screen min-h-svh flex flex-col items-center justify-center bg-[#f3f5f8] relative overflow-hidden w-full p-4 font-sans selection:bg-brass/20 selection:text-ink">
+      {/* Centered card */}
+      <div className="relative z-10 w-full max-w-sm rounded-3xl bg-white shadow-[0_12px_40px_rgba(22,35,63,0.08)] border border-[#dfe4ed] p-8 flex flex-col items-center">
+        {/* App branding header */}
+        <div className="flex flex-col items-center text-center mb-6">
+          <div className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-brass/15 text-brass border border-brass/25 shadow-xs mb-3">
             <CalendarRange className="size-6 text-brass" aria-hidden="true" />
-            <CardTitle className="font-display text-2xl">UniSchedule</CardTitle>
           </div>
-          <CardDescription>Sign in to manage your institution&apos;s schedule.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {error ? (
-            <Alert variant="destructive" className="mb-4">
-              <CircleAlert aria-hidden="true" />
-              <AlertTitle>Sign-in failed</AlertTitle>
-              <AlertDescription>{error.message || "Incorrect username or password."}</AlertDescription>
-            </Alert>
-          ) : null}
-          <form onSubmit={handleSubmit} className="grid gap-4">
-            <div>
-              <Label htmlFor="login-username">Username</Label>
-              <Input
-                id="login-username"
-                type="text"
-                required
-                autoComplete="username"
-                autoFocus
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                disabled={isSubmitting || loadingAuth}
-                className="mt-1.5"
-              />
-            </div>
-            <div>
-              <Label htmlFor="login-password">Password</Label>
-              <div className="relative mt-1.5">
-                <Input
-                  id="login-password"
-                  type={showPassword ? "text" : "password"}
-                  required
-                  autoComplete="current-password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  disabled={isSubmitting || loadingAuth}
-                  className="pr-10"
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setShowPassword((s) => !s)}
-                  disabled={isSubmitting || loadingAuth}
-                  aria-label={showPassword ? "Hide password" : "Show password"}
-                  aria-pressed={showPassword}
-                  className="absolute top-1/2 right-1 h-7 w-7 -translate-y-1/2"
-                >
-                  {showPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
-                </Button>
+          <h1 className="font-display text-2xl font-bold text-ink tracking-tight leading-tight">
+            UniSchedule
+          </h1>
+          <p className="mt-1 text-xs text-ink-soft">
+            University scheduling
+          </p>
+        </div>
+
+        {/* Form */}
+        <form onSubmit={handleSignIn} className="flex flex-col w-full gap-4">
+          <div className="w-full flex flex-col gap-3">
+            <input
+              id="auth-username"
+              placeholder="Email or username"
+              type="text"
+              autoComplete="username"
+              autoFocus
+              value={username}
+              disabled={isSubmitting || loadingAuth}
+              className="w-full px-5 py-3.5 rounded-xl bg-[#f8fafc] text-ink placeholder:text-[#8a96b5] text-sm border border-[#dfe4ed] focus:outline-none focus:ring-2 focus:ring-brass/40 focus:border-brass transition"
+              onChange={(e) => {
+                setUsername(e.target.value);
+                if (error) setError("");
+              }}
+            />
+            <input
+              id="auth-password"
+              placeholder="Password"
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              disabled={isSubmitting || loadingAuth}
+              className="w-full px-5 py-3.5 rounded-xl bg-[#f8fafc] text-ink placeholder:text-[#8a96b5] text-sm border border-[#dfe4ed] focus:outline-none focus:ring-2 focus:ring-brass/40 focus:border-brass transition"
+              onChange={(e) => {
+                setPassword(e.target.value);
+                if (error) setError("");
+              }}
+            />
+            {error && (
+              <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-xl px-4 py-2.5 text-left">
+                {error}
               </div>
-            </div>
-            <Button type="submit" disabled={isSubmitting || loadingAuth} className="w-full">
-              {isSubmitting ? (
-                <>
-                  <LoaderCircle className="animate-spin" aria-hidden="true" />
-                  Signing in…
-                </>
-              ) : (
-                "Sign in"
-              )}
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
+            )}
+          </div>
+
+          <button
+            type="submit"
+            disabled={isSubmitting || loadingAuth}
+            className="w-full mt-1 bg-[#16233f] hover:bg-[#22355e] text-white font-medium px-5 py-3.5 rounded-full shadow-md active:scale-[0.99] transition text-sm flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isSubmitting ? (
+              <>
+                <LoaderCircle className="w-4 h-4 animate-spin" aria-hidden="true" />
+                Signing in…
+              </>
+            ) : (
+              "Sign in"
+            )}
+          </button>
+        </form>
+      </div>
     </div>
   );
 }
+
+export default LoginPage;
