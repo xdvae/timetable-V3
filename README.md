@@ -1,199 +1,406 @@
-# University Timetable Generator
+# UniSchedule
 
-A working web app: enter your rooms, faculty, enrollment numbers, subjects
-and teaching assignments; click **Generate Timetable**; it solves a real
-constraint-satisfaction problem (Google OR-Tools CP-SAT) and gives you a
-conflict-free timetable, exportable as Excel / CSV / printable HTML.
+UniSchedule is a university timetable management and generation system. Administrators manage
+scheduling data — configuration, rooms, faculty, programs, enrollments, sections, subjects, and
+teaching assignments — and the system generates a conflict-free timetable with Google OR-Tools
+CP-SAT, viewable by section, faculty member, or room and exportable as Excel, CSV, or printable
+HTML.
 
-## What it does
+The project has one browser frontend and one backend:
 
-- **Auto-splits sections**: give it "BCA-1, 250 students" + your max
-  section size (e.g. 80) → it creates BCA-1-A/B/C/D automatically, sized
-  as evenly as possible.
-- **Auto-splits lab groups**: each section is split further for
-  practicals based on your max lab-group size (e.g. 40).
-- **Hard constraints enforced** (never violated): no teacher, room, or
-  student group is ever double-booked; room/lab capacity is respected;
-  no class spans across the lunch break; a faculty member never teaches
-  more than N consecutive periods without a free period.
-- **Soft optimization**: the solver minimizes how late in the day classes
-  run, which — because a group can't have two classes at once — also
-  eliminates dead gaps in the middle of the day as a side effect. Net
-  result: students finish as early as possible with no "9-11, gap, 3-4"
-  schedules.
-- **Multiple views**: by section, by faculty, by room — each exportable
-  independently.
+- **Flask backend** (`backend/app.py`, `backend/api_routes.py`, `backend/models.py`,
+  `backend/scheduler.py`, …) — the scheduling engine, the database, the JSON API,
+  file exports/sample downloads, and (in production) the React static bundle.
+- **React frontend** (`frontend/`) — the administrative UI, communicating with Flask
+  over same-origin `/api/*` requests (plus same-origin export/download URLs).
 
-## Setup
+## Overview
+
+The core scheduling problem: given rooms (with capacity and type), faculty (with availability
+and workload limits), student groups (sections split into lab groups), subjects, teaching
+assignments, working days, periods, lunch-break rules, and consecutive-teaching limits, produce
+a weekly timetable in which no room, faculty member, or student group is ever double-booked.
+
+Backend responsibilities:
+
+- **Flask** — HTTP routes for the JSON API, file exports/sample downloads, and the
+  React production bundle.
+- **SQLAlchemy** — ORM over the application database (SQLite file by default).
+- **Flask-Login** — session-cookie authentication (single admin login per deployment).
+- **OR-Tools CP-SAT** — the constraint solver behind timetable generation.
+
+Frontend responsibilities (React application in `frontend/`):
+
+- **React + Vite + JavaScript** with the **React Compiler** enabled.
+- **React Router** — client-side routing mirroring the backend's page structure.
+- **Tailwind CSS v4 + shadcn/ui + Radix primitives + Lucide React** — design system and
+  accessible UI components. No TypeScript, no Axios, no TanStack Query.
+
+## Architecture
+
+```text
+Browser
+   │
+   ▼
+React frontend (frontend/)
+   │  same-origin /api/* (session cookie, no tokens)
+   │  same-origin /export/* and /import/sample/* downloads
+   ▼
+Flask (backend/app.py, served as backend.app:app)
+   ├── JSON API layer (backend/api_routes.py)
+   ├── Export / sample-download routes
+   ├── React production bundle (frontend/dist/, SPA fallback)
+   │
+   ├── SQLAlchemy / database (backend/models.py, backend/instance/timetable.db)
+   │
+   └── Scheduler / OR-Tools (backend/scheduler.py)
+```
+
+The React application is the browser frontend. The Flask application exposes the JSON
+API under `/api/*`, serves timetable exports under `/export/*` and sample CSVs under
+`/import/sample/*` (both called directly by React as same-origin downloads), and — in
+production — serves the React production build with an SPA fallback. The React
+timetable uses custom CSS Grid (not FullCalendar) against the same lane/block semantics
+the backend produces.
+
+## Project Structure
+
+```text
+UniSchedule/
+├── backend/
+│   ├── app.py           Flask application (API + export/sample-download routes +
+│   │                     React production-bundle serving); served as backend.app:app
+│   ├── api_routes.py    JSON API layer (/api/*) for the React frontend
+│   ├── helpers.py       Shared timetable helpers (section splitting, timetable-view
+│   │                     queries/titles, export cell text) used by backend/app.py
+│   │                     and backend/api_routes.py
+│   ├── models.py        SQLAlchemy models (Config, Room, Faculty, Program,
+│   │                     Enrollment, Section, LabGroup, Subject,
+│   │                     TeachingAssignment, ScheduledClass, AdminUser)
+│   ├── scheduler.py     OR-Tools CP-SAT scheduling engine (untouched by frontend work)
+│   ├── validators.py    Shared validation/normalization (e.g. room names)
+│   ├── csv_import.py    Rooms + workload CSV import pipeline
+│   ├── export.py        Timetable export builders (CSV / HTML / XLSX grids)
+│   ├── seed_demo.py     Loads backend/sample_data/ through the real CSV import pipeline
+│   ├── backup.py        Timestamped SQLite backups for scheduled jobs
+│   ├── audit_schedule.py Standalone checker that re-verifies a generated schedule
+│   ├── requirements.txt Pinned Python dependencies
+│   ├── sample_data/     rooms_sample.csv + workload_sample.csv
+│   └── instance/        Local application state (see Database)
+├── frontend/            React application (see Frontend)
+├── Procfile             gunicorn entrypoint for hosting platforms (backend.app:app)
+├── .env.example         Documented environment variables (safe to commit)
+└── README.md
+```
+
+```text
+frontend/
+├── src/
+│   ├── app/            router.jsx, auth.jsx (RequireAuth), providers.jsx
+│   ├── components/
+│   │   ├── dashboard/  StatCard
+│   │   ├── feedback/   toast system, loading/error/empty states
+│   │   ├── layout/     AppShell, Page, Panel, placeholders
+│   │   ├── navigation/ sidebar + nav-config
+│   │   ├── timetable/  TimetableGrid, TimetableClassBlock, TimetableLegend
+│   │   └── ui/         shadcn/ui primitives (button, input, table, …)
+│   ├── hooks/          useApi, useAuth, useToast, useMediaQuery
+│   ├── lib/            utils (cn)
+│   ├── pages/          one folder per route (Dashboard, Rooms, …)
+│   ├── services/
+│   │   └── api/        centralized fetch client + per-domain modules
+│   ├── App.jsx
+│   ├── main.jsx
+│   └── index.css       Tailwind v4 theme + UniSchedule design tokens
+├── public/
+├── package.json
+├── vite.config.js      Tailwind plugin, @ alias, /api dev proxy → :5050
+├── components.json     shadcn/ui configuration
+└── jsconfig.json       @/* path alias
+```
+
+## Backend
+
+### Flask application (`backend/app.py`)
+
+Owns the HTTP layer: the JSON API blueprint, timetable file exports
+(`/export/<view>/<id>/<fmt>`), sample CSV downloads (`/import/sample/<kind>`), and
+serving the React production bundle with an SPA fallback. Shared timetable helpers
+(section splitting, view queries, export cell text) live in `helpers.py` so both the
+routes and the API use one implementation. Authentication is enforced globally: every
+backend route except the API login and the React shell requires a signed-in session.
+
+### API layer (`backend/api_routes.py`)
+
+A Blueprint exposing the data and outcomes as JSON, reusing the existing queries,
+helpers, and scheduler invocation — no duplicated business rules. Unauthenticated API
+calls receive a machine-readable `401 {"error": "Authentication required."}`.
+
+Authentication/session:
+
+- `POST /api/login`, `POST /api/logout`, `GET /api/me`, `POST /api/change-password`
+
+Read APIs:
+
+- `/api/dashboard`, `/api/config`, `/api/rooms`, `/api/faculty`,
+  `/api/faculty/<fid>/availability`, `/api/programs`, `/api/enrollments`,
+  `/api/enrollments/<eid>/sections`, `/api/subjects`, `/api/assignments`,
+  `/api/overview`, `/api/timetable`, `/api/timetable/<view>/<obj_id>`,
+  `/api/timetable/free`
+
+Write APIs mirror the former form POSTs (rooms, faculty, programs,
+enrollments, subjects, assignments, config, availability, CSV imports, schedule generation),
+returning `{ok, message, …}` on success and `{error, field_errors?}` with 4xx statuses on
+validation failure. Section payloads expose `preferred_theory_room_id` (null when unset);
+`POST /api/sections/<sid>/preferred-room` with `{room_id}` (or null to clear) configures a
+section's soft home-room preference for future timetable generations — it never regenerates
+or moves the current timetable. Faculty soft scheduling preferences
+(`GET|POST /api/faculty/<fid>/preferences`, `POST /api/faculty/preferences/<pid>`,
+`POST /api/faculty/preferences/<pid>/delete`) configure per-faculty `TIME_WINDOW` /
+`DAY_OFF_PREFERENCE` hints — soft-only (hard blocks stay on the availability grid),
+future-generations-only, never rescheduling anything. Timetable downloads (Excel/CSV/printable HTML via `/export/*`) and
+sample CSVs (`/import/sample/*`) are same-origin download routes, which React calls
+directly.
+
+## Scheduling Engine
+
+`backend/scheduler.py` expands each teaching assignment into session blocks and places them with
+OR-Tools CP-SAT subject to hard constraints — room type/capacity/equipment match, no
+room/faculty/student-group double-booking, lab-group sessions never overlapping their parent
+section's theory, no block spanning the lunch break, faculty availability, a maximum
+run of consecutive teaching periods, and HN1 (a student section may have at most two
+consecutive theory periods in a teaching-period segment of a day — labs and free periods
+reset the theory streak, and the streak does not cross configured breaks) — while minimizing how late in the day classes run so
+schedules come out compact with no dead gaps. Its rules are intentionally kept separate from
+the React frontend, which only renders the resulting lane/block structures.
+
+Backend phases: 6C (additive schema), 6D (HN1), 6D.2 (read-only audit),
+6E (locked interdepartment blocks), 6F (specializations — synchronized
+cohorts with conservative originating-section occupancy, no student-level
+scheduling).
+
+## Timetable Views
+
+The backend supports three timetable views — `section`, `faculty`, `room` — plus a Who's Free
+matrix showing every faculty member's hour-by-hour status for a chosen day. Multi-period
+blocks render as one merged cell (`colspan`); genuinely parallel sessions (e.g. two lab
+groups in different rooms) render as stacked lanes under the same day. The React timetable
+renders these lane/block structures with custom CSS Grid, and the Who's Free matrix is a
+dedicated React page against `/api/timetable/free`.
+
+## Frontend
+
+Stack: React 19, Vite, JavaScript (no TypeScript), React Compiler, React Router, Tailwind
+CSS v4, shadcn/ui on Radix primitives, Lucide icons, plain `fetch` (no Axios).
+
+Architecture:
+
+- `services/api/` — one centralized `fetch` client (same-origin + credentials, structured
+  `ApiError`s) with thin per-domain modules; no endpoint strings in JSX.
+- `app/auth.jsx` — Flask session-cookie auth via `GET /api/me`; `RequireAuth` redirects
+  signed-out users to `/login?next=`. No JWT, nothing in `localStorage`.
+- `hooks/useApi` — shared GET-on-mount hook with cancellation; every data page shows
+  Skeleton loading states, human-readable `Alert` errors with retry, and proper empty states.
+- `components/layout/` — responsive `AppShell` (246px sidebar on desktop, off-canvas drawer
+  with hamburger on mobile), `Page` (title/subtitle/breadcrumbs/actions, 1400px cap),
+  `Panel` with institutional left-rule accents.
+- `index.css` — design tokens carrying over the existing identity: ink `#16233F`, brass
+  `#B8873A`, steel `#3E6B96`, sage `#4B7B62`, signal `#A6423A`; Inter for UI, Source Serif 4
+  for display type. Theory → steel, practical/lab → sage, danger → signal, primary actions →
+  brass.
+
+## Authentication
+
+Single-tenant session auth with Flask-Login. The first admin login is created automatically
+on first startup from environment variables (see `.env.example`); the React app learns the
+current user from `GET /api/me` and never sees or stores passwords, tokens, or secrets.
+There is no JWT and no credential storage in the browser. Never commit `.env` or any real
+secret — only `.env.example` belongs in Git.
+
+## Current Frontend Status
+
+Accurate as of the `frontend` branch. The React app is the complete browser frontend:
+every workflow below renders real backend data over `/api/*` (exports and sample CSVs
+use the same-origin download routes).
+
+### Foundation
+
+- [x] React/Vite foundation
+- [x] React Compiler
+- [x] Tailwind/shadcn foundation
+- [x] React Router
+- [x] Responsive application shell
+- [x] Authentication (`/login` sign-in form, `GET /api/me`, `RequireAuth`, `?next=`)
+- [x] Centralized API client
+- [x] Flask JSON API layer (`backend/api_routes.py`)
+
+### Implemented React pages (real data)
+
+- [x] Login (`/login`, session-cookie sign-in with `?next=` redirect)
+- [x] Dashboard (`/`)
+- [x] Config (`/config`, read + write)
+- [x] Rooms (`/rooms`, create + delete)
+- [x] Faculty (`/faculty`, create + delete, links to availability and soft scheduling preferences)
+- [x] Faculty availability (`/faculty/:fid/availability`, read + write)
+- [x] Faculty preferences (`/faculty/:fid/preferences`, soft `TIME_WINDOW` / day-off hints for future generations)
+- [x] Programs (`/programs`, create + delete)
+- [x] Enrollments (`/enrollments`, create + delete, auto-generated sections)
+- [x] Sections (`/enrollments/:eid/sections`, read-only)
+- [x] Subjects (`/subjects`, create + delete)
+- [x] Teaching assignments (`/assignments`, create + delete)
+- [x] Import (`/import`, rooms + workload CSV upload, sample CSV downloads)
+- [x] Overview (`/overview`, sections/groups + faculty workload)
+- [x] Timetable (`/timetable`, generation + section/faculty/room views + Excel/CSV/Print export)
+- [x] Who's Free (`/timetable/free`)
+- [x] Change Password (`/account/change-password`)
+
+## Local Development
+
+Backend (from the repository root):
 
 ```bash
-cd timetable_app
-python3 -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-python app.py
+python -m venv venv
+# Windows: venv\Scripts\activate
+# macOS/Linux: source venv/bin/activate
+pip install -r backend/requirements.txt
+python -m backend.app
 ```
 
-Open **http://127.0.0.1:5050** in your browser.
+The backend serves on `http://127.0.0.1:5050`. On first run it creates the SQLite database and
+the initial admin login from the environment (see below).
 
-The first run creates `timetable.db` (SQLite) automatically — all your
-data persists there between runs. To start completely fresh, just delete
-`timetable.db`.
-
-## What's new in this version
-
-- **Fixed room-name format.** Only a room number with an optional single block letter is accepted (e.g. `503 B`, `B503`, `301`) — every equivalent spelling normalizes to one canonical form (`503-B`), and the database rejects true duplicates outright.
-- **Faculty load warnings.** Adding a teaching assignment shows a flash message with the faculty member's weekly hours before/after, and flags it in orange if it pushes them past their configured weekly max.
-- **Overview page.** A dedicated screen showing every section and its auto-generated lab groups, plus a per-faculty workload card listing every subject/group they teach and their running weekly total.
-- **Subjects carry default weekly hours.** Each subject can define its usual theory hrs/week and practical hrs/week (labs default to a 2-hour block, but you can set it to 1 to split a lab into two separate 1-hour sessions). Picking a subject on the Teaching Assignments form auto-fills these — still fully editable per assignment.
-- **Split section timetable view.** A section's page now shows the whole-section theory schedule and each lab group's practical schedule as separate, clearly labelled tables/sheets, instead of one merged (and confusing) grid.
-- **Free Faculty view.** A new page (`Timetable → Who's Free When`) showing every faculty member's status hour-by-hour for a chosen day — green for free, red for what they're teaching.
-- **Colorful, clearer UI.** Theory vs. practical are color-coded throughout (blue/green), section and lab-group cards, and a refreshed visual style overall.
-
-## v4 fixes (latest feedback round)
-
-- **Section timetable is one unified table again.** Theory and both lab groups are shown together in a single grid (each cell lists subject, faculty, group, and room), rather than split into separate tables — matches how a department actually reads a class timetable.
-- **Free Faculty view now shows room numbers too**, in the same "Subject · Group · Room" format used everywhere else.
-- **Faculty weekly workload is now visible in three places**: a "Weekly Load" column on the Faculty list, a subtitle on each faculty's timetable page ("Weekly teaching load: 13 hrs"), and the existing per-faculty card on the Overview page.
-- **`audit_schedule.py`** — a standalone script that independently re-checks every generated schedule against every hard constraint (room/faculty/student-group double-booking, break-crossing, capacity/equipment, consecutive-teaching limit) directly against the database, separately from the solver's own logic. Run it any time after generating a timetable: `python audit_schedule.py`.
-
-## v6: full UI redesign
-
-The interface has been redesigned for people who aren't developers — department staff, not programmers — since this is heading toward a real deployment.
-
-- **Sidebar navigation**, grouped into Setup / People / Academics / Data / Timetable, replacing the old flat 12-item top navbar that was genuinely hard to scan.
-- **A calm, institutional visual identity** instead of generic Bootstrap defaults: deep ink-navy structure, a warm brass accent used only for primary actions, a serif typeface for page titles, Inter for everything else (dense timetable tables need maximum legibility).
-- **Content sections use a colored left rule** instead of the identical drop-shadow card look everywhere, so the page reads more like organized records than a generic dashboard template.
-- Every existing page (rooms, faculty, subjects, assignments, config, import, etc.) inherits the same color/type tokens automatically, so the whole app is visually consistent without having rewritten every single template from scratch.
-- The color legend (theory=blue, lab=green, free=green, busy=red) is now shown directly above each grid so the meaning of the colors doesn't have to be guessed.
-
-Note: this app loads Bootstrap, Bootstrap Icons, and Google Fonts from public CDNs at runtime — normal on any machine with regular internet access, but they won't load if you're testing in a fully offline/sandboxed environment.
-
-## Phase 1: selling this as a per-institution product
-
-The app now supports being deployed once per paying customer — same codebase, each institution gets its own instance, own database, own login. Nobody's data ever touches anyone else's, because there's no shared server at all yet (real multi-tenancy is a Phase 2 problem, deliberately deferred).
-
-### What's new
-
-- **Login required.** Every page now requires signing in. The first admin login is created automatically on first startup from environment variables.
-- **Environment-based setup.** `.env.example` lists everything a new deployment needs: `SECRET_KEY`, `INSTITUTION_NAME`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, optionally `DATABASE_URL`. Copy it to `.env` for local use, or set these in your hosting platform's dashboard for a real deploy.
-- **Change Password page**, so you can hand off a temporary password and the customer can change it themselves.
-- **`backup.py`** — copies the database to a timestamped file in `backups/`, prunes old ones, and documents how to sync those off-server (e.g. with `rclone` to S3/Backblaze). Run it on a daily cron/scheduled job once real customer data is in here.
-- **`Procfile`** and `gunicorn` in requirements — for deploying to Railway, Render, Fly.io, or similar platforms that auto-detect a `Procfile`. Don't run `python app.py` (the Flask dev server) in production — the Procfile's gunicorn command is the real one, with a 90-second timeout since the scheduler can take up to a minute on larger datasets.
-
-### Onboarding a new paying institution (the actual repeatable steps)
-
-1. Deploy a fresh copy of this codebase to your hosting platform of choice, on its own subdomain.
-2. Set these environment variables in that deployment:
-   - `SECRET_KEY` — generate with `python -c "import secrets; print(secrets.token_hex(32))"`
-   - `INSTITUTION_NAME` — shown on their dashboard
-   - `ADMIN_USERNAME` / `ADMIN_PASSWORD` — their first login
-3. Deploy. The database and admin login are created automatically on first boot.
-4. Set up a daily scheduled job to run `python backup.py` (most platforms have a "cron job" or "scheduled task" feature).
-5. Send them their login URL and password. They do the rest through the UI — Config, Rooms, Faculty, Enrollments, Subjects, Assignments, or a CSV import — with zero further work from you.
-
-### Local testing with auth
+Frontend (from `frontend/`):
 
 ```bash
-cp .env.example .env
-# edit .env: set ADMIN_PASSWORD to something, or leave blank to get a
-# generated password printed to the console on first run
-python seed_demo.py   # optional — loads the demo dataset
-python app.py
-```
-The demo dataset shipped with this zip already has a login set up: **username `admin`, password `demo-admin-2026`** — change it immediately if you're using this beyond local testing.
-
-## v5 fixes (rendering bug + a real scheduling bug + bigger dataset)
-
-- **Fixed a genuine timetable-view rendering bug.** A multi-hour block (e.g. a 2-hour lab) used to repeat its text in every hour column it covered, which could look like two separate lectures at the same time. It's now rendered as one merged cell (colspan) — no more visual duplication. When two *different* sub-groups legitimately have parallel sessions at the same hour (different rooms), they now show as clearly separate stacked rows under that day, with a note explaining they're simultaneous-but-different, not a conflict.
-- **Found and fixed a real scheduling bug.** The solver treated a section and its lab groups as fully independent resources, so it could (rarely) schedule a lab-group practical at the same time as a whole-section theory class — impossible in reality, since a lab group's students are a subset of the section. Added a hard constraint so a lab group's session can never overlap its own section's theory session. `audit_schedule.py` now checks for this specifically too.
-- **Much bigger sample dataset for testing.** `sample_data/workload_sample.csv` now covers 4 programs — BCA, BSc IT, BCS, and B.Tech CSE — each with 9 subjects (mixing theory-only, practical-only, and theory+lab subjects), ~19 faculty (some teaching across multiple programs, as real faculty do), and realistic weekly loads (27-30 hrs/section). `seed_demo.py` now loads this through the actual CSV import pipeline rather than hand-built ORM calls, so it also doubles as an end-to-end test of that feature.
-
-## Fastest way to try it: CSV import
-
-Instead of clicking through forms, go to **Import CSV** in the nav bar and
-upload two files:
-
-1. **Rooms CSV** — `name, room_type (theory/lab), capacity, equipment_count`
-2. **Workload CSV** — one row per (section, subject, faculty) teaching
-   assignment: `program, year_label, section, total_students, faculty_name,
-   faculty_type, subject_code, subject_name, session_type (theory/practical),
-   credits, periods_per_week, block_length`
-
-Sample files with realistic mock data (3 programs, 5 sections, 10 faculty,
-21 subjects, each section loaded to ~20-22 periods/week) are in
-`sample_data/` and downloadable straight from the Import page. A
-**practical** row automatically fans out into one teaching assignment per
-auto-generated lab group of that section — you don't need to list lab
-groups yourself. Re-uploading is safe: existing rooms/faculty/subjects/
-sections are matched by name and not duplicated.
-
-After importing both files, go to **Timetable → Generate Timetable**.
-
-## How to use it (in order) — manual data entry
-
-1. **Config** — set working days, period times, where the lunch break
-   falls, max section size, max lab group size, and how many consecutive
-   periods a faculty member can teach before needing a break.
-2. **Rooms** — add theory rooms and labs (capacity, and for labs, how
-   much equipment / how many computers).
-3. **Faculty** — add faculty; optionally set specific unavailable slots
-   (e.g. a visiting faculty member only free two mornings a week).
-4. **Programs** — e.g. BCA, B.Tech CSE, MCA.
-5. **Enrollments** — pick a program + year label (e.g. "1st Year") and
-   total student count. Sections and lab groups are generated for you
-   immediately — click "View Sections" to see them.
-6. **Subjects** — add subjects against each enrollment (program+year),
-   with credits.
-7. **Teaching Assignments** — the core input: faculty + subject +
-   section (theory) or lab group (practical) + periods/week + block
-   length (1 = single-period theory class, 2 = a 2-hour lab block).
-8. **Timetable → Generate Timetable** — runs the solver (a few seconds
-   to ~30s depending on size). Then browse by section / faculty / room,
-   and export to Excel, CSV, or a printable HTML page from each view.
-
-## If scheduling fails
-
-The solver will tell you *why* it couldn't find a timetable — usually one
-of:
-- Not enough rooms/labs of the right capacity for a group's size
-- A faculty member's availability is too restrictive for their load
-- Too many periods/week assigned relative to available slots
-
-Add more rooms, loosen availability, or spread load across more faculty,
-then re-generate.
-
-## Project structure
-
-```
-app.py          Flask routes (all pages + API-like endpoints)
-models.py       SQLAlchemy models (SQLite)
-scheduler.py    OR-Tools CP-SAT scheduling engine
-export.py       Excel / CSV / printable-HTML export
-templates/      Jinja2 HTML templates (Bootstrap 5)
-requirements.txt
+npm install
+npm run dev
 ```
 
-## Notes on the scheduling model
+Vite serves the React app (its normal development port) and proxies `/api` requests to the
+backend at `127.0.0.1:5050`, so same-origin session cookies work during development.
+`npm run lint` and `npm run build` verify the frontend.
 
-Each "Teaching Assignment" (faculty + subject + section/lab-group +
-periods/week + block length) is expanded into session blocks that the
-solver places on a (day, start period, room) triple, subject to:
+Production (single process, same origin):
 
-- room type/capacity match
-- no faculty/room/student-group double-booking
-- no block spans the lunch break
-- faculty consecutive-teaching-without-a-break limit
+```bash
+cd frontend && npm install && npm run build
+cd .. && gunicorn backend.app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 90
+```
 
-...and minimizes the sum of start-periods across all sessions, which is
-what produces compact, early-finishing schedules without needing a more
-complex hand-tuned gap-penalty formula.
+Flask serves `frontend/dist/` (git-ignored build output) with an SPA fallback: unknown
+non-API `GET` paths return `index.html` so React Router deep links work, while unmatched
+`/api/*` paths still return JSON 404s and `/export/*` + `/import/sample/*` keep serving
+downloads. If `dist/` has not been built, browser hits 404 but the API is unaffected.
 
-This is deliberately an MVP core engine matching what you described:
-extending it (visiting-faculty auto-assignment, theory+lab adjacency
-preference, combined/cross-department classes, multi-department
-simultaneous scheduling) is straightforward from here — the data model
-already supports inter-department and visiting faculty types, it's just
-not yet wired into extra constraints.
-#   t i m e t a b l e - V 3  
- 
+Demo data (optional, exercises the real import pipeline):
+
+```bash
+python -m backend.seed_demo
+```
+
+Or use the Import page with `backend/sample_data/rooms_sample.csv` and
+`backend/sample_data/workload_sample.csv`, then Timetable → Generate Timetable.
+
+## Environment Configuration
+
+Copy `.env.example` to `.env` for local use (`.env` is git-ignored and must never be
+committed). Variables: `SECRET_KEY` (signs session cookies; required in any real deployment),
+`INSTITUTION_NAME` (shown on the dashboard), `ADMIN_USERNAME` / `ADMIN_PASSWORD` (first
+login; a random password is generated and printed once if unset), and optionally
+`DATABASE_URL` (defaults to the local SQLite file; a Postgres URL is supported for more
+durable deployments). The checked-in `backend/instance/timetable.db` is intentional demo state (see
+Database) — it is already tracked in Git, so ignore rules below do not remove it.
+
+## Database
+
+Local development uses SQLite. The default file lives under `backend/instance/` (see
+`SQLALCHEMY_DATABASE_URI` in `backend/app.py`; `DATABASE_URL` overrides it).
+`backend/instance/timetable.db` is currently tracked in Git as the project's demo state — do not
+delete it, and point `DATABASE_URL` elsewhere if you want a scratch database. Any *new* `*.db` /
+`*.sqlite` files are ignored by the root `.gitignore`. Schema changes go through `backend/models.py`
+plus the versioned runner in `backend/migrate.py` (revisions in
+`backend/migrations/versions/`, linear chain `6c → 6e → 6f → 6j`). To bring an
+older database file up to the current schema, copy it aside first and run
+`python -m backend.migrate --db <path-to-copy.db> upgrade` — never point `--db`
+at the live file unless you pass `--allow-live` explicitly. Deleting the SQLite
+file and re-running recreates an empty schema (losing all data; prefer migrating).
+
+## CSV Import
+
+Two formats, handled by `backend/csv_import.py` (also reachable as structured JSON via
+`POST /api/import/rooms` and `POST /api/import/workload`):
+
+- **Rooms CSV** (`backend/sample_data/rooms_sample.csv`): `name, room_type (theory/lab), capacity,
+  equipment_count` — equipment optional, labs only. Names normalize to one canonical form;
+  re-uploads update in place.
+- **Workload CSV** (`backend/sample_data/workload_sample.csv`): one row per teaching assignment —
+  `program, year_label, section, total_students, faculty_name, faculty_type, subject_code,
+  subject_name, session_type (theory/practical), credits, periods_per_week, block_length`.
+  Sections are created exactly as named; lab groups auto-generate from config; a practical row
+  fans out into one assignment per lab group. Re-uploads match by name and are not duplicated.
+
+## Export
+
+`backend/export.py` builds day × period grids (single view per file) served by `/export/*`
+routes, which the React app calls directly:
+
+- **Excel** (`.xlsx`, styled workbook) — download
+- **CSV** (`text/csv`) — download
+- **Printable HTML** (`text/html`) — opens for printing
+
+There is no PDF export. Exports are per timetable view (one section, faculty member, or
+room at a time).
+
+## Development Rules
+
+### Backend preservation
+
+`backend/scheduler.py`, `backend/models.py`, `backend/validators.py`, `backend/csv_import.py`,
+`backend/export.py`, the database schema, and the API contracts must not change unless strictly
+required for React/backend connectivity or application integrity. All React work lives under
+`frontend/`. The API layer (`backend/api_routes.py`) plus shared `backend/helpers.py` is the
+sanctioned bridge — extend it rather than editing business logic.
+
+### Frontend rules
+
+Use React, JavaScript, Tailwind, shadcn/ui, Lucide, and React Router. Do not introduce MUI,
+Bootstrap, Ant Design, Chakra UI, or FullCalendar into the React app, and do not add state,
+data-fetching, or styling libraries without a concrete, recorded need.
+
+## Git Workflow
+
+- Work happens on feature branches (current migration branch: `frontend`); open PRs for
+  review instead of pushing straight to main.
+- Backend changes need explicit justification in the PR description.
+- Never commit secrets (`.env`, passwords, keys) or local database copies; generated
+  artifacts (`node_modules/`, `dist/`, `__pycache__/`, `backups/`) stay ignored.
+- Never force-push shared branches.
+
+## Contributing
+
+1. Create a branch from the current migration branch.
+2. Backend: `pip install -r backend/requirements.txt`. Frontend: `cd frontend && npm install`.
+3. Make your changes (frontend work stays in `frontend/`).
+4. Run `npm run lint` and `npm run build`; for backend changes, run the app and
+   `python -m backend.audit_schedule --db <path>` after generating a timetable. (There is no automated test
+   suite; verification is manual — say what you ran in the PR.)
+   Audit/diagnostic commands are read-only (SQLite `mode=ro`, no migrations, no admin
+   creation); anything requiring schema changes operates on a file copy via the explicit
+   `python -m backend.migrate --db <copy> upgrade` command — never on the live database.
+5. Inspect `git status` and `git diff --name-only`; confirm no unintended files.
+6. Submit a PR describing behavior changes and verification steps.
+
+## License
+
+License: not currently specified (no LICENSE file in the repository).
+
+## Known Limitations / Roadmap
+
+- Each deployment serves one institution with one admin login; multi-tenancy is not
+  implemented.
+- Production is a single gunicorn process serving both the API and the React build
+  (see Local Development); split static hosting is not currently configured.
+- The checked-in demo database does not currently regenerate cleanly end-to-end
+  (`python -m backend.audit_schedule` reports break-spanning lab blocks against the current
+  config), so treat generation results on the demo dataset as illustrative until the data
+  is refreshed.

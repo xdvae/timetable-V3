@@ -1,0 +1,189 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+/*
+ ---break---
+ */
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * UniSchedule design tokens.
+ * Carries over the existing application's visual language (ink / brass /
+ * steel / sage / signal) into shadcn-compatible CSS variables + Tailwind v4
+ * theme mappings. Light theme only, matching the current product.
+ */
+:root {
+  --radius: 0.5rem;
+
+  /* shadcn surface tokens */
+  --background: #f3f5f8;
+  --foreground: #16233f;
+  --card: #ffffff;
+  --card-foreground: #16233f;
+  --popover: #ffffff;
+  --popover-foreground: #16233f;
+  --primary: #b8873a;
+  --primary-foreground: #241a0c;
+  --secondary: #e9edf3;
+  --secondary-foreground: #16233f;
+  --muted: #e9edf3;
+  --muted-foreground: #4a5876;
+  --accent: #e7eef5;
+  --accent-foreground: #16233f;
+  --destructive: #a6423a;
+  --destructive-foreground: #ffffff;
+  --border: #dfe4ed;
+  --input: #dfe4ed;
+  --ring: #b8873a;
+
+  /* UniSchedule domain tokens */
+  --ink: #16233f;
+  --ink-soft: #4a5876;
+  --paper: #f3f5f8;
+  --panel: #ffffff;
+  --line: #dfe4ed;
+  --brass: #b8873a;
+  --brass-dark: #96692a;
+  --steel: #3e6b96;
+  --steel-tint: #e7eef5;
+  --sage: #4b7b62;
+  --sage-tint: #e7f1ec;
+  --signal: #a6423a;
+  --signal-tint: #f7e9e7;
+  --free: #e7f1ec;
+  --free-ink: #2e5b44;
+  --sidebar: #111a2e;
+  --sidebar-foreground: #c9d2e5;
+  --sidebar-primary: #b8873a;
+  --sidebar-primary-foreground: #241a0c;
+  --sidebar-accent: rgba(255, 255, 255, 0.08);
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: rgba(255, 255, 255, 0.1);
+  --sidebar-ring: #b8873a;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* domain colors as utilities: bg-steel, text-sage, … */
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-paper: var(--paper);
+  --color-panel: var(--panel);
+  --color-line: var(--line);
+  --color-brass: var(--brass);
+  --color-brass-dark: var(--brass-dark);
+  --color-steel: var(--steel);
+  --color-steel-tint: var(--steel-tint);
+  --color-sage: var(--sage);
+  --color-sage-tint: var(--sage-tint);
+  --color-signal: var(--signal);
+  --color-signal-tint: var(--signal-tint);
+  --color-free: var(--free);
+  --color-free-ink: var(--free-ink);
+
+  --font-sans: "Inter", -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Source Serif 4", Georgia, serif;
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-size: 0.93rem;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+    letter-spacing: -0.01em;
+  }
+}
+
+/*
+ * Timetable cell semantics (theory = steel, practical/lab = sage).
+ * Layout (grid/colspan/lanes) ships with the future timetable components;
+ * only the color semantics live here so every timetable surface agrees.
+ */
+@layer components {
+  .cell-theory {
+    background-color: var(--steel-tint);
+    border-left: 3px solid var(--steel);
+    border-radius: 5px;
+  }
+
+  .cell-practical {
+    background-color: var(--sage-tint);
+    border-left: 3px solid var(--sage);
+    border-radius: 5px;
+  }
+
+  .free-cell {
+    background-color: var(--free);
+    color: var(--free-ink);
+    font-weight: 600;
+  }
+
+  .busy-cell {
+    background-color: var(--signal-tint);
+    color: var(--signal);
+  }
+
+  /* Hide scrollbars cleanly while preserving scroll capability */
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+/*
+ ---break---
+ */
+.dark {
+  --sidebar: hsl(240 5.9% 10%);
+  --sidebar-foreground: hsl(240 4.8% 95.9%);
+  --sidebar-primary: hsl(224.3 76.3% 48%);
+  --sidebar-primary-foreground: hsl(0 0% 100%);
+  --sidebar-accent: hsl(240 3.7% 15.9%);
+  --sidebar-accent-foreground: hsl(240 4.8% 95.9%);
+  --sidebar-border: hsl(240 3.7% 15.9%);
+  --sidebar-ring: hsl(217.2 91.2% 59.8%);
+}

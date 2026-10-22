@@ -1,0 +1,12 @@
+# Reserved for the future timetable implementation.
+#
+# The eventual timetable renders with custom CSS Grid (NOT FullCalendar) and
+# must preserve the backend lane semantics served by
+# GET /api/timetable/<view>/<id>:
+#   - day × period structure with `colspan` for multi-period blocks
+#   - stacked lanes for parallel sessions / lab groups
+#   - theory (steel) vs practical/lab (sage) distinction
+#   - empty cells, day grouping, class cards
+#
+# Cell color semantics already live in src/index.css
+# (.cell-theory / .cell-practical / .free-cell / .busy-cell).

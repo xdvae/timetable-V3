@@ -1,0 +1,232 @@
+import os
+import secrets
+import sys
+from dotenv import load_dotenv
+
+# This module now lives in backend/, so the repository root is its parent
+# directory. Ensure the root stays importable however the app is launched
+# (gunicorn backend.app:app, python -m backend.app, or python backend/app.py).
+_BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+_ROOT_DIR = os.path.dirname(_BACKEND_DIR)
+if _ROOT_DIR not in sys.path:
+    sys.path.insert(0, _ROOT_DIR)
+
+load_dotenv()
+# If the process was started with backend/ as the working directory, the
+# call above finds no .env; fall back to the repository-root .env so the
+# same environment configuration loads as before the move. Existing
+# environment variables are never overridden.
+if os.path.isfile(os.path.join(_ROOT_DIR, ".env")):
+    load_dotenv(os.path.join(_ROOT_DIR, ".env"))
+
+from flask import Flask, request, send_file, abort
+from flask_login import LoginManager, current_user
+
+from backend.models import db, init_db, Config, AdminUser
+from backend.helpers import (_cfg_days_periods, cell_text_plain, get_view_classes,
+                             view_title)
+from backend import export as exp
+
+# Explicit instance path: Flask would otherwise default to <repo-root>/instance
+# for the "backend.app" import name, but the database lives in
+# backend/instance/ after the reorganization. Pinning this keeps the
+# default sqlite:///timetable.db URI resolving to backend/instance/timetable.db
+# exactly as instance/timetable.db did before the move.
+os.makedirs(os.path.join(_BACKEND_DIR, "instance"), exist_ok=True)
+app = Flask(__name__, instance_path=os.path.join(_BACKEND_DIR, "instance"))
+
+# ---------------------------------------------------------------------------
+# Phase 1 deployment config — everything below is read from environment
+# variables so the SAME codebase can be deployed once per paying institution
+# just by setting different env vars (no code changes per customer).
+#
+#   DATABASE_URL       sqlite:///instance/timetable.db  (default) or a
+#                       Postgres URL for a more durable production deploy
+#   SECRET_KEY          random value used to sign session cookies — set a
+#                       real one in production, or a random one is generated
+#                       each boot (fine for local dev, NOT for prod: sessions
+#                       won't survive a restart if you don't set this)
+#   INSTITUTION_NAME    shown as the session name on first run
+#   ADMIN_USERNAME      login username created on first run (default: admin)
+#   ADMIN_PASSWORD      login password created on first run — REQUIRED in
+#                       production; if unset, a random one is generated and
+#                       printed to the server log ONCE so you can retrieve it
+# ---------------------------------------------------------------------------
+app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL", "sqlite:///timetable.db")
+app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
+init_db(app)
+
+login_manager = LoginManager()
+login_manager.init_app(app)
+# No login_view: the React SPA owns the /login page. Unauthenticated /api/*
+# callers get JSON 401 via the unauthorized handler in api_routes.py; other
+# unauthenticated requests get a plain 401 (React guards its own routes and
+# redirects to /login?next= client-side).
+
+
+@login_manager.user_loader
+def load_user(user_id):
+    return AdminUser.query.get(int(user_id))
+
+
+def init_admin_from_env():
+    """Create the first admin login from env vars, once, on startup."""
+    with app.app_context():
+        if AdminUser.query.count() > 0:
+            return
+        username = os.environ.get("ADMIN_USERNAME", "admin")
+        password = os.environ.get("ADMIN_PASSWORD")
+        generated = False
+        if not password:
+            password = secrets.token_urlsafe(9)
+            generated = True
+        user = AdminUser(username=username)
+        user.set_password(password)
+        db.session.add(user)
+
+        institution = os.environ.get("INSTITUTION_NAME")
+        if institution:
+            cfg = Config.query.first()
+            if cfg:
+                cfg.session_name = institution
+
+        db.session.commit()
+        if generated:
+            print("=" * 70)
+            print(f"  No ADMIN_PASSWORD set — generated one for first login:")
+            print(f"  Username: {username}")
+            print(f"  Password: {password}")
+            print("  Set ADMIN_PASSWORD as an env var to control this yourself.")
+            print("=" * 70)
+
+
+init_admin_from_env()
+
+
+# --------------------------------------------------------------------- auth
+@app.before_request
+def require_login():
+    """Every backend route requires login except the API login and static files."""
+    # "api.api_login" is the JSON login endpoint (see api_routes.py): it must
+    # stay reachable without a session, otherwise React could never sign in.
+    # "serve_react" is the React SPA shell (see below): it must stay public
+    # so logged-out users can load the sign-in page; React guards its own
+    # routes client-side via RequireAuth.
+    allowed = {"static", "serve_react", "api.api_login"}
+    if request.endpoint not in allowed and not current_user.is_authenticated:
+        return login_manager.unauthorized()
+
+
+# ------------------------------------------------------------------ import
+SAMPLE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sample_data")
+
+
+@app.route("/import/sample/<kind>")
+def import_sample(kind):
+    fname = {"rooms": "rooms_sample.csv", "workload": "workload_sample.csv"}.get(kind)
+    if not fname:
+        abort(404)
+    path = os.path.join(SAMPLE_DIR, fname)
+    return send_file(path, as_attachment=True, download_name=fname, mimetype="text/csv")
+
+
+# --------------------------------------------------------------- timetable
+@app.route("/export/<view>/<int:obj_id>/<fmt>")
+def export_view(view, obj_id, fmt):
+    cfg, days, periods = _cfg_days_periods()
+    title = view_title(view, obj_id)
+    classes = get_view_classes(view, obj_id)
+    grid = exp.build_grid(classes, days, periods, cell_text_plain)
+
+    if fmt == "csv":
+        data = exp.export_csv(grid, days, periods)
+        return (data, 200, {
+            "Content-Type": "text/csv",
+            "Content-Disposition": f"attachment; filename={title.replace(' ', '_')}.csv",
+        })
+    if fmt == "html":
+        data = exp.export_html(grid, days, periods, title=title)
+        return (data, 200, {"Content-Type": "text/html"})
+    if fmt == "xlsx":
+        buf = exp.export_xlsx(grid, days, periods, title=title)
+        return send_file(buf, as_attachment=True, download_name=f"{title.replace(' ', '_')}.xlsx",
+                          mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    abort(404)
+
+
+# ------------------------------------------------------- React SPA serving
+# Production serves the React frontend from this same Flask process
+# (Option A: single origin, so the session cookie keeps working with no
+# CORS). `npm run build` inside frontend/ produces frontend/dist/, which is
+# git-ignored by design. During development the Vite dev server proxies
+# /api to Flask instead, so a missing dist/ only affects direct browser
+# hits here — never the API, export, or sample-download routes, which are
+# concrete rules and always take precedence over this catch-all.
+# NOTE: backend/ holds the Flask code while frontend/ stays at the repo
+# root, so the bundle lives one directory above this file.
+DIST_DIR = os.path.join(_ROOT_DIR, "frontend", "dist")
+
+
+def api_catchall_response():
+    """JSON 404/405 for ``/api/*`` paths that reach the SPA catch-all.
+
+    Phase 6V: the GET catch-all below would otherwise shadow
+    routing-level 405s — a wrong-method GET against a POST-only
+    endpoint (e.g. ``GET /api/schedule/run``) reads as 404 instead of
+    the unified 405 contract from Phase 6U. When the path exists under
+    a non-GET method, keep the 405 contract; otherwise it is genuinely
+    unknown (404). Non-API paths never reach here.
+    """
+    from flask import current_app
+    from werkzeug.exceptions import MethodNotAllowed, NotFound
+    from backend import errors as error_contract
+    path = request.path or ""
+    # This helper only runs when the GET catch-all was selected, so no
+    # GET rule matches `path`. A POST match proves a POST-only endpoint
+    # lives here (wrong-method GET → 405). A bare MethodNotAllowed only
+    # reflects the catch-all's own GET/HEAD/OPTIONS — anything beyond
+    # those proves a real endpoint under another method.
+    try:
+        current_app.url_map.bind_to_environ(request.environ).match(
+            path, method="POST")
+        exists_under_other_method = True
+    except MethodNotAllowed as exc:
+        exists_under_other_method = bool(
+            set(exc.valid_methods or ()) - {"GET", "HEAD", "OPTIONS"})
+    except NotFound:
+        exists_under_other_method = False
+    if exists_under_other_method:
+        return error_contract.error_response(
+            code=error_contract.METHOD_NOT_ALLOWED,
+            message="Method not allowed.", status=405)
+    abort(404)  # unmatched API URLs stay machine-readable (see init_api)
+
+
+@app.route("/", defaults={"path": ""}, methods=["GET"])
+@app.route("/<path:path>", methods=["GET"])
+def serve_react(path):
+    """Serve the React production build with SPA fallback."""
+    if (request.path or "").startswith("/api/"):
+        return api_catchall_response()
+    if not os.path.isdir(DIST_DIR):
+        abort(404)
+    base = os.path.abspath(DIST_DIR)
+    target = os.path.abspath(os.path.join(base, path))
+    if path and target.startswith(base + os.sep) and os.path.isfile(target):
+        return send_file(target)
+    index = os.path.join(base, "index.html")
+    if os.path.isfile(index):
+        return send_file(index)
+    abort(404)
+
+
+# ------------------------------------------------------------------ api layer
+# JSON API for the React frontend (see api_routes.py). Registers /api/*
+# routes; the download routes above (export + sample CSVs) stay on Flask
+# because React calls them directly as same-origin downloads.
+from backend.api_routes import init_api
+init_api(app, login_manager)
+
+
+if __name__ == "__main__":
+    app.run(debug=True, host="127.0.0.1", port=5050)
