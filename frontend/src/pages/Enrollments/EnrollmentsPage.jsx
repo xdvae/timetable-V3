@@ -297,7 +297,7 @@ export function EnrollmentsPage() {
           }
         }}
         title={`Delete enrollment ${deleteLabel}?`}
-        description="This also deletes its sections and lab groups. This cannot be undone."
+        description="This also deletes its sections, lab groups, subjects, teaching assignments and their timetable classes. This cannot be undone."
         confirmLabel="Delete"
         onConfirm={handleDelete}
         isConfirming={deletion.isSubmitting}

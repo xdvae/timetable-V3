@@ -29,7 +29,7 @@ export function LoginPage() {
 
     const trimmed = username.trim();
     if (!trimmed || !password) {
-      setError("Please enter both email/username and password.");
+      setError("Please enter both username and password.");
       return;
     }
 
@@ -73,7 +73,8 @@ export function LoginPage() {
           <div className="w-full flex flex-col gap-3">
             <input
               id="auth-username"
-              placeholder="Email or username"
+              aria-label="Username"
+              placeholder="Username"
               type="text"
               autoComplete="username"
               autoFocus
@@ -87,6 +88,7 @@ export function LoginPage() {
             />
             <input
               id="auth-password"
+              aria-label="Password"
               placeholder="Password"
               type="password"
               autoComplete="current-password"
@@ -99,7 +101,7 @@ export function LoginPage() {
               }}
             />
             {error && (
-              <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-xl px-4 py-2.5 text-left">
+              <div role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-xl px-4 py-2.5 text-left">
                 {error}
               </div>
             )}

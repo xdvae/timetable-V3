@@ -15,8 +15,18 @@ def _split_evenly(total, n):
     return [base + 1] * rem + [base] * (n - rem)
 
 
+def _read_text(file_storage):
+    """Decode an uploaded CSV. Excel on Windows often saves CP-1252 rather
+    than UTF-8; accept both instead of failing the whole upload."""
+    raw = file_storage.read()
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return raw.decode("cp1252", errors="replace")
+
+
 def import_rooms_csv(file_storage):
-    text = file_storage.read().decode("utf-8-sig")
+    text = _read_text(file_storage)
     reader = csv.DictReader(io.StringIO(text))
     created, updated, errors = 0, 0, []
     for i, row in enumerate(reader, start=2):
@@ -28,6 +38,10 @@ def import_rooms_csv(file_storage):
             equipment_count = int(equip_raw) if equip_raw else None
             if room_type not in ("theory", "lab"):
                 raise ValueError(f"room_type must be 'theory' or 'lab', got '{room_type}'")
+            if capacity < 1:
+                raise ValueError("capacity must be at least 1")
+            if equipment_count is not None and equipment_count < 0:
+                raise ValueError("equipment_count can't be negative")
         except (KeyError, ValueError, RoomNameError) as ex:
             errors.append(f"Row {i}: {ex}")
             continue
@@ -47,7 +61,7 @@ def import_rooms_csv(file_storage):
 
 
 def import_workload_csv(file_storage, cfg):
-    text = file_storage.read().decode("utf-8-sig")
+    text = _read_text(file_storage)
     reader = csv.DictReader(io.StringIO(text))
 
     programs, enrollments, sections, subjects, faculty = {}, {}, {}, {}, {}
@@ -78,6 +92,8 @@ def import_workload_csv(file_storage, cfg):
             block_length = int(row["block_length"])
             if session_type not in ("theory", "practical"):
                 raise ValueError(f"session_type must be 'theory' or 'practical', got '{session_type}'")
+            if total_students < 1:
+                raise ValueError("total_students must be at least 1")
             if block_length < 1 or block_length > periods_per_week:
                 raise ValueError(f"block_length ({block_length}) can't exceed periods_per_week ({periods_per_week})")
         except ValueError as ex:

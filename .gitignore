@@ -91,3 +91,6 @@ Desktop.ini
 *.temp
 *.orig
 *.rej
+
+# Generated session-signing key (created when SECRET_KEY is not set)
+backend/instance/secret_key

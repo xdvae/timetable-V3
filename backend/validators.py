@@ -38,3 +38,37 @@ def normalize_room_name(raw):
         )
     letter = prefix or suffix
     return f"{number}-{letter}" if letter else number
+
+
+_DIGITS_RE = re.compile(r"^\d{1,4}$")
+
+
+def compose_room_name(block, number):
+    """Canonical room name from a Block letter (A-Z or blank) + room number.
+
+    The number must be digits only (1-4 digits). The result uses the same
+    canonical form as normalize_room_name(): "101" or "101-A".
+    """
+    block = (block or "").strip().upper()
+    number = "" if number is None else str(number).strip()
+    if not number:
+        err = RoomNameError("Enter a room number.")
+        err.field = "number"
+        raise err
+    if not _DIGITS_RE.fullmatch(number):
+        err = RoomNameError("Room number must be digits only (e.g. 101).")
+        err.field = "number"
+        raise err
+    if block and (len(block) != 1 or not ("A" <= block <= "Z")):
+        err = RoomNameError("Block must be a single letter from A to Z.")
+        err.field = "block"
+        raise err
+    return f"{number}-{block}" if block else number
+
+
+def split_room_name(name):
+    """(block, number) for a canonical room name; block is None if absent."""
+    m = re.fullmatch(r"(\d{1,4})(?:-([A-Z]))?", name or "")
+    if not m:
+        return None, name
+    return m.group(2), m.group(1)

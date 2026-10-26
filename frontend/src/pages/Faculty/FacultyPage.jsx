@@ -55,34 +55,27 @@ function FacultyTypeBadge({ facultyType }) {
 }
 
 /**
- * Weekly load shown as text plus a thin bar. The bar is decorative support
- * for the numbers (which carry the meaning); over-max rows add explicit
- * "(over max)" text so color is never the only indicator.
+ * Hours allocated to the teacher per week (sum of their teaching
+ * assignments). Only when that goes past their configured weekly limit is a
+ * text badge added, so color is never the only signal.
  */
 function WeeklyLoad({ load, max }) {
+  const hours = Number(load) || 0;
   const safeMax = Number(max) > 0 ? Number(max) : null;
-  const ratio = safeMax ? Math.min(load / safeMax, 1) : 0;
-  const overMax = safeMax !== null && load > safeMax;
+  const overMax = safeMax !== null && hours > safeMax;
   return (
-    <div className="min-w-[140px]">
-      <p className={cn("text-sm font-medium tabular-nums", overMax ? "text-signal" : "text-ink")}>
-        {load}
-        {safeMax !== null ? ` / ${safeMax} hrs` : " hrs"}
-        {overMax ? <span className="ml-1 text-xs font-semibold">(over max)</span> : null}
-      </p>
-      {safeMax !== null ? (
-        <div
-          className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-muted"
-          role="img"
-          aria-label={`Weekly load ${load} of ${safeMax} hours${overMax ? ", over maximum" : ""}`}
+    <p className={cn("text-sm font-medium tabular-nums", overMax ? "text-signal" : "text-ink")}>
+      {hours} {hours === 1 ? "hr" : "hrs"}
+      <span className="font-normal text-muted-foreground"> / week</span>
+      {overMax ? (
+        <span
+          className="ml-2 rounded-full bg-signal/10 px-2 py-0.5 text-xs font-semibold text-signal"
+          title={`Above the ${safeMax} hrs/week limit set for this teacher`}
         >
-          <div
-            className={cn("h-full rounded-full", overMax ? "bg-signal" : "bg-steel")}
-            style={{ width: `${Math.round(ratio * 100)}%` }}
-          />
-        </div>
+          over limit
+        </span>
       ) : null}
-    </div>
+    </p>
   );
 }
 
@@ -260,7 +253,7 @@ export function FacultyPage() {
                 <TableHead scope="col">Name</TableHead>
                 <TableHead scope="col">Department</TableHead>
                 <TableHead scope="col">Type</TableHead>
-                <TableHead scope="col">Weekly Load</TableHead>
+                <TableHead scope="col">Hours / Week</TableHead>
                 <TableHead scope="col">
                   <span className="sr-only">Actions</span>
                 </TableHead>
@@ -319,7 +312,7 @@ export function FacultyPage() {
           }
         }}
         title={`Delete faculty ${pendingDelete?.name ?? ""}?`}
-        description="The faculty record will be removed. This cannot be undone."
+        description="This also removes their teaching assignments, fixed blocks, preferences and their classes in the current timetable. This cannot be undone."
         confirmLabel="Delete"
         onConfirm={handleDelete}
         isConfirming={deletion.isSubmitting}

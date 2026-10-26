@@ -25,6 +25,7 @@ import { getAssignments } from "@/services/api/assignments.js";
 import { getSpecializations } from "@/services/api/specializations.js";
 import { getScheduledClasses } from "@/services/api/schedule.js";
 import { cn } from "@/lib/utils.js";
+import { INVALIDATION_DOMAINS, subscribeInvalidation } from "@/lib/invalidation.js";
 
 const CATEGORY_CONFIG = {
   navigation: { label: "Pages & Navigation", icon: FileText },
@@ -56,6 +57,13 @@ export function UniversalSearchModal({ open, onOpenChange }) {
     }, 150);
     return () => clearTimeout(handler);
   }, [query]);
+
+  // Any successful write (new teacher, generated timetable, …) makes the
+  // cached search index stale: drop it so the next open reloads.
+  useEffect(
+    () => subscribeInvalidation(INVALIDATION_DOMAINS, () => setDataCache(null)),
+    []
+  );
 
   // Load authoritative data when modal opens if not already cached
   useEffect(() => {

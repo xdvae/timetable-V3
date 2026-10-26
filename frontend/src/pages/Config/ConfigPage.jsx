@@ -164,6 +164,7 @@ function ConfigForm({ initial, onSaved }) {
           <ConfigField
             id="max_consecutive_teaching"
             label="Max consecutive teaching periods before a faculty break is required"
+            help="0 means no limit."
             error={fieldErrors.max_consecutive_teaching}
           >
             <Input

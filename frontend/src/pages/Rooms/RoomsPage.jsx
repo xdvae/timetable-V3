@@ -43,21 +43,51 @@ function RoomTypeBadge({ roomType }) {
   return <Badge variant={variant}>{label}</Badge>;
 }
 
+const BLOCK_LETTERS = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
+const NO_BLOCK = "none";
+
+/** "Block A · 101" for canonical names like "101-A"; plain number otherwise. */
+function roomDisplayName(room) {
+  if (!room) return "";
+  if (room.block && room.number) return `Block ${room.block} · ${room.number}`;
+  return room.number || room.name;
+}
+
+/** Theory rooms first, then labs; within each, by block then room number. */
+function sortRooms(rooms) {
+  return [...rooms].sort((a, b) => {
+    const typeA = a.room_type === "lab" ? 1 : 0;
+    const typeB = b.room_type === "lab" ? 1 : 0;
+    if (typeA !== typeB) return typeA - typeB;
+    const blockA = a.block ?? "";
+    const blockB = b.block ?? "";
+    if (blockA !== blockB) return blockA.localeCompare(blockB);
+    return (Number(a.number) || 0) - (Number(b.number) || 0) || String(a.name).localeCompare(String(b.name));
+  });
+}
+
 function AddRoomDialog({ open, onOpenChange, onCreated }) {
   const toast = useToast();
   const { execute, isSubmitting, error, fieldErrors } = useMutation(createRoom);
-  const [name, setName] = useState("");
+  const [block, setBlock] = useState("A");
+  const [number, setNumber] = useState("");
   const [roomType, setRoomType] = useState("theory");
   const [capacity, setCapacity] = useState("");
   const [equipmentCount, setEquipmentCount] = useState("");
 
+  function handleNumberChange(event) {
+    // Digits only, max 4 — anything else is simply not typed.
+    setNumber(event.target.value.replace(/\D/g, "").slice(0, 4));
+  }
+
   async function handleSubmit(event) {
     event.preventDefault();
     const result = await execute({
-      name,
+      block: block === NO_BLOCK ? "" : block,
+      number,
       room_type: roomType,
       capacity,
-      equipment_count: equipmentCount,
+      equipment_count: roomType === "lab" ? equipmentCount : "",
     });
     if (result.ok) {
       toast.success(result.data.message || "Room added.");
@@ -69,6 +99,13 @@ function AddRoomDialog({ open, onOpenChange, onCreated }) {
     }
   }
 
+  const preview = number
+    ? block === NO_BLOCK
+      ? `Room ${number}`
+      : `Block ${block} · Room ${number}`
+    : null;
+  const numberError = fieldErrors.number || fieldErrors.name;
+
   return (
     <Dialog open={open} onOpenChange={isSubmitting ? undefined : onOpenChange}>
       <DialogContent>
@@ -78,24 +115,53 @@ function AddRoomDialog({ open, onOpenChange, onCreated }) {
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <MutationFailure error={error} />
-          <div>
-            <Label htmlFor="room-name">Room Number</Label>
-            <Input
-              id="room-name"
-              className="mt-1.5"
-              required
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. 503 B or 301"
-              disabled={isSubmitting}
-              aria-describedby={fieldErrors.name ? "room-name-error" : undefined}
-            />
-            <p className="mt-1 text-xs text-muted-foreground">
-              Only a room number with an optional single block letter is accepted — spellings normalize
-              to one fixed form, so the same room can never be entered twice.
-            </p>
-            <FieldError id="room-name-error" message={fieldErrors.name} />
+          <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-4">
+            <div>
+              <Label htmlFor="room-block">Block</Label>
+              <Select value={block} onValueChange={setBlock} disabled={isSubmitting}>
+                <SelectTrigger id="room-block" className="mt-1.5" aria-describedby={fieldErrors.block ? "room-block-error" : undefined}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="max-h-72">
+                  {BLOCK_LETTERS.map((letter) => (
+                    <SelectItem key={letter} value={letter}>
+                      Block {letter}
+                    </SelectItem>
+                  ))}
+                  <SelectItem value={NO_BLOCK}>No block</SelectItem>
+                </SelectContent>
+              </Select>
+              <FieldError id="room-block-error" message={fieldErrors.block} />
+            </div>
+            <div>
+              <Label htmlFor="room-number">Room number</Label>
+              <Input
+                id="room-number"
+                className="mt-1.5 tabular-nums"
+                required
+                inputMode="numeric"
+                pattern="[0-9]{1,4}"
+                maxLength={4}
+                autoComplete="off"
+                value={number}
+                onChange={handleNumberChange}
+                placeholder="e.g. 101"
+                disabled={isSubmitting}
+                aria-describedby={numberError ? "room-number-error" : "room-number-hint"}
+              />
+              <FieldError id="room-number-error" message={numberError} />
+            </div>
           </div>
+          <p id="room-number-hint" className="-mt-2 text-xs text-muted-foreground">
+            {preview ? (
+              <>
+                Will be saved as <span className="font-medium text-ink">{preview}</span>. Numbers only
+                — the same room can never be entered twice.
+              </>
+            ) : (
+              "Numbers only — the same room can never be entered twice."
+            )}
+          </p>
           <div>
             <Label htmlFor="room-type">Type</Label>
             <Select value={roomType} onValueChange={setRoomType} disabled={isSubmitting}>
@@ -115,6 +181,7 @@ function AddRoomDialog({ open, onOpenChange, onCreated }) {
               id="room-capacity"
               className="mt-1.5"
               type="number"
+              min="1"
               required
               value={capacity}
               onChange={(e) => setCapacity(e.target.value)}
@@ -123,25 +190,28 @@ function AddRoomDialog({ open, onOpenChange, onCreated }) {
             />
             <FieldError id="room-capacity-error" message={fieldErrors.capacity} />
           </div>
-          <div>
-            <Label htmlFor="room-equipment">Equipment count (labs only, optional)</Label>
-            <Input
-              id="room-equipment"
-              className="mt-1.5"
-              type="number"
-              value={equipmentCount}
-              onChange={(e) => setEquipmentCount(e.target.value)}
-              placeholder="e.g. number of computers"
-              disabled={isSubmitting}
-              aria-describedby={fieldErrors.equipment_count ? "room-equipment-error" : undefined}
-            />
-            <FieldError id="room-equipment-error" message={fieldErrors.equipment_count} />
-          </div>
+          {roomType === "lab" ? (
+            <div>
+              <Label htmlFor="room-equipment">Equipment count (optional)</Label>
+              <Input
+                id="room-equipment"
+                className="mt-1.5"
+                type="number"
+                min="0"
+                value={equipmentCount}
+                onChange={(e) => setEquipmentCount(e.target.value)}
+                placeholder="e.g. number of computers"
+                disabled={isSubmitting}
+                aria-describedby={fieldErrors.equipment_count ? "room-equipment-error" : undefined}
+              />
+              <FieldError id="room-equipment-error" message={fieldErrors.equipment_count} />
+            </div>
+          ) : null}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
               Cancel
             </Button>
-            <Button type="submit" disabled={isSubmitting}>
+            <Button type="submit" disabled={isSubmitting || !number}>
               {isSubmitting ? "Adding…" : "Add Room"}
             </Button>
           </DialogFooter>
@@ -228,7 +298,8 @@ export function RoomsPage() {
           <Table aria-label="Rooms and labs">
             <TableHeader>
               <TableRow>
-                <TableHead scope="col">Name</TableHead>
+                <TableHead scope="col">Block</TableHead>
+                <TableHead scope="col">Room No.</TableHead>
                 <TableHead scope="col">Type</TableHead>
                 <TableHead scope="col">Capacity</TableHead>
                 <TableHead scope="col">Equipment</TableHead>
@@ -238,9 +309,18 @@ export function RoomsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rooms.map((room) => (
+              {sortRooms(rooms).map((room) => (
                 <TableRow key={room.id}>
-                  <TableCell className="font-medium text-ink">{room.name}</TableCell>
+                  <TableCell>
+                    {room.block ? (
+                      <span className="inline-flex size-7 items-center justify-center rounded-md bg-muted font-semibold text-ink">
+                        {room.block}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="font-medium tabular-nums text-ink">{room.number ?? room.name}</TableCell>
                   <TableCell>
                     <RoomTypeBadge roomType={room.room_type} />
                   </TableCell>
@@ -253,7 +333,7 @@ export function RoomsPage() {
                       variant="outline"
                       size="sm"
                       onClick={() => setPendingDelete(room)}
-                      aria-label={`Delete room ${room.name}`}
+                      aria-label={`Delete room ${roomDisplayName(room)}`}
                     >
                       <Trash2 aria-hidden="true" className="text-signal" />
                       Delete
@@ -275,8 +355,8 @@ export function RoomsPage() {
             deletion.reset();
           }
         }}
-        title={`Delete room ${pendingDelete?.name ?? ""}?`}
-        description="The room will be removed. This cannot be undone."
+        title={`Delete room ${pendingDelete ? roomDisplayName(pendingDelete) : ""}?`}
+        description="Classes placed in this room are removed from the current timetable (generate again to re-place them). Rooms used by fixed blocks can't be deleted until those blocks are removed. This cannot be undone."
         confirmLabel="Delete"
         onConfirm={handleDelete}
         isConfirming={deletion.isSubmitting}
