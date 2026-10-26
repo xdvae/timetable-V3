@@ -22,8 +22,18 @@ export default defineConfig({
   server: {
     // Dev-only proxy so the SPA can use same-origin /api calls while the
     // Flask backend runs on :5050. Production serves same-origin: no CORS.
+    // /export and /import/sample are file downloads served by Flask; without
+    // these entries the dev server answered them with the SPA's index.html.
     proxy: {
       '/api': {
+        target: 'http://127.0.0.1:5050',
+        changeOrigin: true,
+      },
+      '/export': {
+        target: 'http://127.0.0.1:5050',
+        changeOrigin: true,
+      },
+      '/import/sample': {
         target: 'http://127.0.0.1:5050',
         changeOrigin: true,
       },

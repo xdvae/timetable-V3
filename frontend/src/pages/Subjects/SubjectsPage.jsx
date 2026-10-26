@@ -357,7 +357,7 @@ export function SubjectsPage() {
           }
         }}
         title={`Delete subject ${pendingDelete?.name ?? ""}?`}
-        description="The subject will be removed. This cannot be undone."
+        description="This also removes its teaching assignments and their classes in the current timetable. This cannot be undone."
         confirmLabel="Delete"
         onConfirm={handleDelete}
         isConfirming={deletion.isSubmitting}

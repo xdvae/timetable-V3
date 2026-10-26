@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { Link } from "react-router";
-import { CircleAlert, CircleCheck, Download, FileUp, Upload } from "lucide-react";
+import { CircleAlert, CircleCheck, Download, Upload } from "lucide-react";
 
 import { Page, Panel } from "@/components/layout/page.jsx";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert.jsx";

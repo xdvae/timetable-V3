@@ -117,6 +117,11 @@ function errorMessage(data, status) {
     const text = data.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
     if (text) return text.slice(0, 200);
   }
+  if (status === 502 || status === 503 || status === 504) {
+    // An empty 502/503/504 comes from the dev proxy or a hosting proxy, not
+    // from Flask: the backend process is down or did not answer in time.
+    return "The backend server is not responding. Make sure the Flask backend is running (python -m backend.app), then try again.";
+  }
   return `Request failed (${status}).`;
 }
 

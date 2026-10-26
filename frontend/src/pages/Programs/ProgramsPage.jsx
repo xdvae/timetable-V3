@@ -213,7 +213,7 @@ export function ProgramsPage() {
           }
         }}
         title={`Delete program ${pendingDelete?.name ?? ""}?`}
-        description="The program will be removed. This cannot be undone."
+        description="This also deletes its years/enrollments with their sections, subjects, teaching assignments and timetable classes. This cannot be undone."
         confirmLabel="Delete"
         onConfirm={handleDelete}
         isConfirming={deletion.isSubmitting}

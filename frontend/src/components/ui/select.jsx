@@ -60,6 +60,10 @@ function SelectContent({ className, children, position = "popper", ...props }) {
   );
 }
 
+function SelectGroup({ ...props }) {
+  return <SelectPrimitive.Group data-slot="select-group" {...props} />;
+}
+
 function SelectLabel({ className, ...props }) {
   return (
     <SelectPrimitive.Label data-slot="select-label" className={cn("px-2 py-1.5 text-sm font-medium", className)} {...props} />
@@ -119,6 +123,7 @@ function SelectScrollDownButton({ className, ...props }) {
 export {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectLabel,
   SelectScrollDownButton,

@@ -32,6 +32,17 @@ export function createAssignment(payload) {
   return api.post("/api/assignments", payload);
 }
 
+/**
+ * POST /api/assignments/bulk { faculty_id, subject_id, session_type,
+ *   periods_per_week, block_length, section_ids[] | lab_group_ids[] } →
+ * 201 { ok, message, category, created, assignments, faculty_load }.
+ * All-or-nothing: 422 (with field_errors / DUPLICATE_ASSIGNMENT failures)
+ * creates nothing.
+ */
+export function createAssignmentsBulk(payload) {
+  return api.post("/api/assignments/bulk", payload);
+}
+
 /** POST /api/assignments/<aid>/delete → 200 { ok, message }. 404 when missing. */
 export function deleteAssignment(id) {
   return api.post(`/api/assignments/${id}/delete`);
