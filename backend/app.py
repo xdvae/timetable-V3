@@ -53,7 +53,54 @@ app = Flask(__name__, instance_path=os.path.join(_BACKEND_DIR, "instance"))
 #                       printed to the server log ONCE so you can retrieve it
 # ---------------------------------------------------------------------------
 app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL", "sqlite:///timetable.db")
-app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
+def _stable_secret_key():
+    """SECRET_KEY from the environment, else one generated key kept on disk.
+
+    A fresh random key per process breaks logins whenever more than one
+    process serves the app (the Procfile runs 2 gunicorn workers): a
+    session signed by one worker is rejected by the other, so requests
+    randomly come back "Authentication required". The generated key is
+    created once (atomically, first worker wins) in the instance folder and
+    reused by every worker and every restart.
+    """
+    env_key = os.environ.get("SECRET_KEY")
+    if env_key:
+        return env_key
+    path = os.path.join(app.instance_path, "secret_key")
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        pass
+    except OSError:
+        return secrets.token_hex(32)  # read-only disk: per-process fallback
+    else:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(secrets.token_hex(32))
+    # A worker that lost the race may read before the winner has written.
+    for _ in range(50):
+        try:
+            with open(path) as fh:
+                key = fh.read().strip()
+            if len(key) >= 32:
+                return key
+        except OSError:
+            break
+        import time
+        time.sleep(0.02)
+    return secrets.token_hex(32)
+
+
+app.config["SECRET_KEY"] = _stable_secret_key()
+# Timetable generation runs OR-Tools in a separate child process so a
+# native solver crash can never kill this web server (see
+# backend/solver_runner.py). SOLVER_ISOLATION=0 solves in-process instead.
+app.config["SOLVER_ISOLATION"] = os.environ.get(
+    "SOLVER_ISOLATION", "1").strip().lower() not in ("0", "false", "no", "off")
+try:
+    app.config["SOLVER_TIME_LIMIT"] = max(
+        5, int(os.environ.get("SOLVER_TIME_LIMIT", "30")))
+except ValueError:
+    app.config["SOLVER_TIME_LIMIT"] = 30
 init_db(app)
 
 login_manager = LoginManager()
@@ -101,6 +148,32 @@ def init_admin_from_env():
 
 
 init_admin_from_env()
+
+
+def repair_orphans_on_startup():
+    """Remove rows left pointing at deleted parents by older versions.
+
+    Before deletes cascaded (backend/deletion.py), deleting a teacher,
+    subject, class or program left its dependent rows behind. They were
+    invisible in the UI but still fed timetable generation. Clean them up
+    once at boot; a fresh or healthy database is left untouched.
+    """
+    from backend.deletion import purge_orphans
+    with app.app_context():
+        try:
+            report = purge_orphans()
+            if report.counts:
+                db.session.commit()
+                print(f"[startup] Removed leftover rows from earlier deletes: "
+                      f"{report.summary()}.")
+            else:
+                db.session.rollback()
+        except Exception as exc:  # noqa: BLE001 - never block startup
+            db.session.rollback()
+            print(f"[startup] Skipped leftover-row cleanup: {type(exc).__name__}")
+
+
+repair_orphans_on_startup()
 
 
 # --------------------------------------------------------------------- auth

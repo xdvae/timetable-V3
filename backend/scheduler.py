@@ -36,6 +36,7 @@ Soft objective (what makes the timetable *good*, not just legal):
     both "no dead gaps" and "go home early" behaviour for free.
 """
 import itertools
+import os
 import time
 from ortools.sat.python import cp_model
 
@@ -1073,7 +1074,9 @@ def run_scheduler(assignments, rooms, faculty_unavailable, days, num_periods,
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = time_limit_seconds
-    solver.parameters.num_search_workers = 8
+    # num_search_workers is deprecated in recent OR-Tools; num_workers is
+    # the supported name. Never ask for more workers than cores.
+    solver.parameters.num_workers = max(1, min(8, os.cpu_count() or 1))
     status = solver.Solve(model)
 
     if status == cp_model.INFEASIBLE:

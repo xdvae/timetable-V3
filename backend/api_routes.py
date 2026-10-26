@@ -22,8 +22,10 @@ from backend.models import (db, Config, Room, Faculty, Program, Enrollment,
 from backend.scheduler import run_scheduler
 from backend import export as exp
 from backend import csv_import
-from backend.validators import normalize_room_name, RoomNameError
+from backend.validators import (normalize_room_name, RoomNameError,
+                                compose_room_name, split_room_name)
 from backend import errors as error_contract
+from backend import deletion
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
 
@@ -159,6 +161,34 @@ def _get_config():
     return Config.query.first()
 
 
+def _run_delete(fn, obj):
+    """Run one dependency-aware delete atomically (see backend/deletion.py)."""
+    try:
+        report = fn(obj)
+        db.session.commit()
+        return report
+    except deletion.DeleteBlocked as exc:
+        db.session.rollback()
+        raise ApiError(exc.message, 409, code="DELETE_BLOCKED",
+                       details=exc.details,
+                       failures=[{"code": "DELETE_BLOCKED",
+                                  "message": exc.message,
+                                  "details": exc.details}])
+    except Exception:
+        db.session.rollback()
+        raise
+
+
+def _deleted_message(label, report):
+    extra = report.summary()
+    if not extra:
+        return f"{label} deleted."
+    msg = f"{label} deleted, along with {extra}."
+    if report.counts.get("scheduled_classes"):
+        msg += " Regenerate the timetable to fill the gaps."
+    return msg
+
+
 def _faculty_load_map():
     rows = db.session.query(
         TeachingAssignment.faculty_id,
@@ -168,8 +198,10 @@ def _faculty_load_map():
 
 
 def _room_json(r):
+    block, number = split_room_name(r.name)
     return {"id": r.id, "name": r.name, "room_type": r.room_type,
-            "capacity": r.capacity, "equipment_count": r.equipment_count}
+            "capacity": r.capacity, "equipment_count": r.equipment_count,
+            "block": block, "number": number}
 
 
 def _section_json(s):
@@ -533,7 +565,8 @@ def api_assignments():
                          "block_length": a.block_length} for a in assignments],
         "faculty": [_faculty_json(f, loads.get(f.id, 0)) for f in faculty],
         # Same conceptual shape as the Jinja template's subjects_json.
-        "subjects": [{"id": s.id, "name": s.name,
+        "subjects": [{"id": s.id, "name": s.name, "code": s.code,
+                      "enrollment_id": s.enrollment_id,
                       "program_name": s.enrollment.program.name if s.enrollment and s.enrollment.program else "?",
                       "year_label": s.enrollment.year_label if s.enrollment else "?",
                       "theory_hours_per_week": s.theory_hours_per_week,
@@ -541,10 +574,12 @@ def api_assignments():
                       "practical_block_length": s.practical_block_length}
                      for s in subjects],
         "sections": [{"id": s.id, "name": s.name,
+                       "enrollment_id": s.enrollment_id,
                        "student_count": s.student_count,
                        "preferred_theory_room_id":
                            s.preferred_theory_room_id} for s in sections],
         "lab_groups": [{"id": lg.id, "name": lg.name,
+                        "section_id": lg.section_id,
                         "student_count": lg.student_count} for lg in lab_groups],
         "faculty_load": loads,
         "subjects_json": {s.id: {"theory": s.theory_hours_per_week,
@@ -658,15 +693,57 @@ def api_config_save():
     # Same fields and blank-break-means-0 rule as the Jinja config form.
     data = _data()
     cfg = _get_config()
-    cfg.session_name = _require_str(data, "session_name")
-    cfg.max_section_size = _required_int(data, "max_section_size")
-    cfg.max_lab_group_size = _required_int(data, "max_lab_group_size")
-    cfg.working_days = _require_str(data, "working_days")
-    cfg.periods = _require_str(data, "periods")
-    cfg.break_after_periods = _optional_int(data, "break_after_periods", default=0)
-    cfg.max_consecutive_teaching = _required_int(data, "max_consecutive_teaching")
+    session_name = _require_str(data, "session_name")
+    max_section_size = _required_int(data, "max_section_size")
+    max_lab_group_size = _required_int(data, "max_lab_group_size")
+    working_days_raw = _require_str(data, "working_days")
+    periods_raw = _require_str(data, "periods")
+    break_after = _optional_int(data, "break_after_periods", default=0)
+    max_consecutive = _required_int(data, "max_consecutive_teaching")
+
+    errors = {}
+    if max_section_size < 1:
+        errors["max_section_size"] = "Must be at least 1."
+    if max_lab_group_size < 1:
+        errors["max_lab_group_size"] = "Must be at least 1."
+    days = [d.strip() for d in working_days_raw.split(",") if d.strip()]
+    if not days:
+        errors["working_days"] = "Enter at least one working day."
+    elif len(set(d.lower() for d in days)) != len(days):
+        errors["working_days"] = "Each working day may appear only once."
+    elif any(len(d) > 10 for d in days):
+        errors["working_days"] = "Use short day names (10 characters max), e.g. Mon."
+    periods = [p.strip() for p in periods_raw.split("|") if p.strip()]
+    if not periods:
+        errors["periods"] = "Enter at least one period."
+    if break_after is None or break_after < 0:
+        errors["break_after_periods"] = "Can't be negative (0 means no break)."
+    elif periods and break_after > len(periods):
+        errors["break_after_periods"] = (
+            f"There are only {len(periods)} periods; the break must come "
+            f"after period 0-{len(periods)} (0 means no break).")
+    if max_consecutive < 0:
+        errors["max_consecutive_teaching"] = "Can't be negative (0 means no limit)."
+    if errors:
+        raise ApiError("Some settings are not valid.", 422, errors)
+
+    structure_changed = (cfg.day_list() != days
+                         or len(cfg.period_list()) != len(periods)
+                         or (cfg.break_after_periods or 0) != break_after
+                         or cfg.max_consecutive_teaching != max_consecutive)
+    cfg.session_name = session_name
+    cfg.max_section_size = max_section_size
+    cfg.max_lab_group_size = max_lab_group_size
+    cfg.working_days = ",".join(days)
+    cfg.periods = "|".join(periods)
+    cfg.break_after_periods = break_after
+    cfg.max_consecutive_teaching = max_consecutive
     db.session.commit()
-    return jsonify({"ok": True, "message": "Configuration saved.",
+    message = "Configuration saved."
+    if structure_changed and ScheduledClass.query.count() > 0:
+        message += (" Days, periods or break rules changed — generate the "
+                    "timetable again so it follows the new settings.")
+    return jsonify({"ok": True, "message": message,
                     "config": _config_json(cfg)})
 
 
@@ -675,16 +752,37 @@ def api_config_save():
 def api_room_create():
     # Same normalization + duplicate rule/messages as the Jinja rooms form.
     data = _data()
-    try:
-        name = normalize_room_name(data.get("name", ""))
-    except RoomNameError as ex:
-        raise ApiError(str(ex), 422, {"name": str(ex)})
+    if "number" in data or "block" in data:
+        # Block (A-Z, optional) + digits-only room number from the form.
+        try:
+            name = compose_room_name(data.get("block"), data.get("number"))
+        except RoomNameError as ex:
+            field = getattr(ex, "field", "number")
+            raise ApiError(str(ex), 422, {field: str(ex)})
+    else:
+        try:
+            name = normalize_room_name(data.get("name", ""))
+        except RoomNameError as ex:
+            raise ApiError(str(ex), 422, {"name": str(ex)})
     if Room.query.filter_by(name=name).first():
-        message = f"Room '{name}' already exists — not adding a duplicate."
-        raise ApiError(message, 422, {"name": message})
-    r = Room(name=name, room_type=_require_str(data, "room_type"),
-             capacity=_required_int(data, "capacity"),
-             equipment_count=_optional_int(data, "equipment_count", default=None))
+        block, number = split_room_name(name)
+        shown = f"Block {block}, room {number}" if block else f"Room {number}"
+        message = f"{shown} already exists — not adding a duplicate."
+        raise ApiError(message, 422, {"number": message, "name": message})
+    room_type = _require_str(data, "room_type").lower()
+    if room_type not in ("theory", "lab"):
+        raise ApiError("Invalid input.", 422,
+                       {"room_type": "Choose Theory Room or Lab."})
+    capacity = _required_int(data, "capacity")
+    if capacity < 1:
+        raise ApiError("Invalid input.", 422,
+                       {"capacity": "Capacity must be at least 1."})
+    equipment_count = _optional_int(data, "equipment_count", default=None)
+    if equipment_count is not None and equipment_count < 0:
+        raise ApiError("Invalid input.", 422,
+                       {"equipment_count": "Can't be negative."})
+    r = Room(name=name, room_type=room_type, capacity=capacity,
+             equipment_count=equipment_count)
     db.session.add(r)
     db.session.commit()
     return jsonify({"ok": True, "message": f"Room '{r.name}' added.",
@@ -697,19 +795,29 @@ def api_room_delete(room_id):
     r = Room.query.get(room_id)
     if not r:
         raise ApiError("Room not found.", 404)
-    db.session.delete(r)
-    db.session.commit()
-    return jsonify({"ok": True, "message": "Room deleted."})
+    name = r.name
+    report = _run_delete(deletion.delete_room, r)
+    return jsonify({"ok": True,
+                    "message": _deleted_message(f"Room '{name}'", report),
+                    "removed": report.counts})
 
 
 @api_bp.route("/faculty", methods=["POST"])
 @login_required
 def api_faculty_create():
     data = _data()
+    faculty_type = (data.get("faculty_type", "") or "regular").strip().lower()
+    if faculty_type not in ("regular", "inter-department", "visiting"):
+        raise ApiError("Invalid input.", 422,
+                       {"faculty_type": "Choose Regular, Inter-department or Visiting."})
+    weekly_max_hours = _optional_int(data, "weekly_max_hours", default=24)
+    if weekly_max_hours is not None and weekly_max_hours < 0:
+        raise ApiError("Invalid input.", 422,
+                       {"weekly_max_hours": "Can't be negative."})
     f = Faculty(name=_require_str(data, "name"),
-                department=data.get("department", ""),
-                faculty_type=data.get("faculty_type", "") or "regular",
-                weekly_max_hours=_optional_int(data, "weekly_max_hours", default=24))
+                department=(data.get("department", "") or "").strip(),
+                faculty_type=faculty_type,
+                weekly_max_hours=weekly_max_hours)
     db.session.add(f)
     db.session.commit()
     return jsonify({"ok": True, "message": f"Faculty '{f.name}' added.",
@@ -722,9 +830,11 @@ def api_faculty_delete(fid):
     f = Faculty.query.get(fid)
     if not f:
         raise ApiError("Faculty not found.", 404)
-    db.session.delete(f)
-    db.session.commit()
-    return jsonify({"ok": True, "message": "Faculty deleted."})
+    name = f.name
+    report = _run_delete(deletion.delete_faculty, f)
+    return jsonify({"ok": True,
+                    "message": _deleted_message(f"Faculty '{name}'", report),
+                    "removed": report.counts})
 
 
 @api_bp.route("/faculty/<int:fid>/availability", methods=["POST"])
@@ -881,9 +991,11 @@ def api_program_delete(pid):
     p = Program.query.get(pid)
     if not p:
         raise ApiError("Program not found.", 404)
-    db.session.delete(p)
-    db.session.commit()
-    return jsonify({"ok": True, "message": "Program deleted."})
+    name = p.name
+    report = _run_delete(deletion.delete_program, p)
+    return jsonify({"ok": True,
+                    "message": _deleted_message(f"Program '{name}'", report),
+                    "removed": report.counts})
 
 
 @api_bp.route("/enrollments", methods=["POST"])
@@ -897,6 +1009,12 @@ def api_enrollment_create():
     program_id = _required_int(data, "program_id")
     year_label = _require_str(data, "year_label")
     total_students = _required_int(data, "total_students")
+    if total_students < 1:
+        raise ApiError("Invalid input.", 422,
+                       {"total_students": "Must be at least 1."})
+    if Program.query.get(program_id) is None:
+        raise ApiError("Program not found.", 404,
+                       {"program_id": "This program no longer exists."})
 
     e = Enrollment(program_id=program_id, year_label=year_label,
                    total_students=total_students)
@@ -945,10 +1063,11 @@ def api_enrollment_delete(eid):
     e = Enrollment.query.get(eid)
     if not e:
         raise ApiError("Enrollment not found.", 404)
-    db.session.delete(e)
-    db.session.commit()
+    label = f"Enrollment '{e.program.name if e.program else '?'} {e.year_label}'"
+    report = _run_delete(deletion.delete_enrollment, e)
     return jsonify({"ok": True,
-                    "message": "Enrollment (and its sections/lab groups) deleted."})
+                    "message": _deleted_message(label, report),
+                    "removed": report.counts})
 
 
 @api_bp.route("/subjects", methods=["POST"])
@@ -961,9 +1080,21 @@ def api_subject_create():
         credits = int(credits_raw or 0) or None
     except (TypeError, ValueError):
         raise ApiError("Invalid input.", 422, {"credits": "Must be a whole number."})
-    s = Subject(code=data.get("code", ""),
+    enrollment_id = _required_int(data, "enrollment_id")
+    if Enrollment.query.get(enrollment_id) is None:
+        raise ApiError("Enrollment not found.", 404,
+                       {"enrollment_id": "This class/year no longer exists."})
+    for field in ("theory_hours_per_week", "practical_hours_per_week"):
+        value = _optional_int(data, field)
+        if value is not None and value < 0:
+            raise ApiError("Invalid input.", 422, {field: "Can't be negative."})
+    block = _optional_int(data, "practical_block_length", default=2)
+    if block is not None and block < 1:
+        raise ApiError("Invalid input.", 422,
+                       {"practical_block_length": "Must be at least 1."})
+    s = Subject(code=(data.get("code", "") or "").strip(),
                 name=_require_str(data, "name"),
-                enrollment_id=_required_int(data, "enrollment_id"),
+                enrollment_id=enrollment_id,
                 credits=credits,
                 theory_hours_per_week=_optional_int(data, "theory_hours_per_week"),
                 practical_hours_per_week=_optional_int(data, "practical_hours_per_week"),
@@ -980,9 +1111,11 @@ def api_subject_delete(sid):
     s = Subject.query.get(sid)
     if not s:
         raise ApiError("Subject not found.", 404)
-    db.session.delete(s)
-    db.session.commit()
-    return jsonify({"ok": True, "message": "Subject deleted."})
+    name = s.name
+    report = _run_delete(deletion.delete_subject, s)
+    return jsonify({"ok": True,
+                    "message": _deleted_message(f"Subject '{name}'", report),
+                    "removed": report.counts})
 
 
 @api_bp.route("/assignments", methods=["POST"])
@@ -993,15 +1126,9 @@ def api_assignment_create():
     # one specialization (cross-section group); section/lab stay NULL and
     # the subject must belong to the specialization's enrollment/cohort.
     data = _data()
-    session_type = _require_str(data, "session_type")
+    session_type = _session_type_field(data)
     faculty_id = _required_int(data, "faculty_id")
-    periods_per_week = _required_int(data, "periods_per_week")
-    block_length = _required_int(data, "block_length")
-
-    if block_length < 1 or block_length > periods_per_week:
-        message = (f"Block length ({block_length}) can't exceed periods/week "
-                   f"({periods_per_week}).")
-        raise ApiError(message, 422, {"block_length": message})
+    periods_per_week, block_length = _hours_fields(data)
 
     fac = Faculty.query.get(faculty_id)
     if not fac:
@@ -1060,16 +1187,20 @@ def api_assignment_create():
                         "faculty_load": {"before": prior_total,
                                          "after": new_total}}), 201
 
+    subject = _subject_for_assignment(_required_int(data, "subject_id"))
     if session_type == "theory":
+        section = _sections_for_subject(
+            subject, [_required_int(data, "section_id")])[0]
         a = TeachingAssignment(
-            faculty_id=faculty_id, subject_id=_required_int(data, "subject_id"),
-            session_type="theory", section_id=_required_int(data, "section_id"),
+            faculty_id=faculty_id, subject_id=subject.id,
+            session_type="theory", section_id=section.id,
             periods_per_week=periods_per_week, block_length=block_length)
     else:
+        group = _lab_groups_for_subject(
+            subject, [_required_int(data, "lab_group_id")])[0]
         a = TeachingAssignment(
-            faculty_id=faculty_id, subject_id=_required_int(data, "subject_id"),
-            session_type="practical",
-            lab_group_id=_required_int(data, "lab_group_id"),
+            faculty_id=faculty_id, subject_id=subject.id,
+            session_type="practical", lab_group_id=group.id,
             periods_per_week=periods_per_week, block_length=block_length)
     db.session.add(a)
     db.session.commit()
@@ -1087,15 +1218,227 @@ def api_assignment_create():
                     "faculty_load": {"before": prior_total, "after": new_total}}), 201
 
 
+def _session_type_field(data):
+    session_type = _require_str(data, "session_type").lower()
+    if session_type not in ("theory", "practical"):
+        raise ApiError("Invalid input.", 422,
+                       {"session_type": "Choose Theory or Practical (Lab)."})
+    return session_type
+
+
+def _hours_fields(data):
+    periods_per_week = _required_int(data, "periods_per_week")
+    block_length = _required_int(data, "block_length")
+    if periods_per_week < 1:
+        message = "Hours/week must be at least 1."
+        raise ApiError(message, 422, {"periods_per_week": message})
+    if block_length < 1 or block_length > periods_per_week:
+        message = (f"Block length ({block_length}) can't exceed periods/week "
+                   f"({periods_per_week}).") if block_length >= 1 else (
+                   "Block length must be at least 1.")
+        raise ApiError(message, 422, {"block_length": message})
+    cfg = _get_config()
+    num_periods = len(cfg.period_list()) if cfg else 0
+    if num_periods and block_length > num_periods:
+        message = (f"A block of {block_length} hours can't fit in a "
+                   f"{num_periods}-period day.")
+        raise ApiError(message, 422, {"block_length": message})
+    return periods_per_week, block_length
+
+
+def _subject_for_assignment(subject_id):
+    subject = Subject.query.get(subject_id)
+    if not subject:
+        raise ApiError("Subject not found.", 404,
+                       {"subject_id": "This subject no longer exists."})
+    return subject
+
+
+def _enrollment_label(enrollment_id):
+    e = Enrollment.query.get(enrollment_id)
+    if not e:
+        return "another class"
+    return f"{e.program.name if e.program else '?'} {e.year_label}"
+
+
+def _sections_for_subject(subject, section_ids):
+    """Load sections, requiring each to belong to the subject's class/year."""
+    rows = {s.id: s for s in Section.query.filter(
+        Section.id.in_(section_ids)).all()} if section_ids else {}
+    out = []
+    for sid in section_ids:
+        s = rows.get(sid)
+        if s is None:
+            raise ApiError("Section not found.", 404,
+                           {"section_id": f"Section {sid} no longer exists."})
+        if s.enrollment_id != subject.enrollment_id:
+            message = (f"'{subject.name}' is a "
+                       f"{_enrollment_label(subject.enrollment_id)} subject, "
+                       f"but section {s.name} belongs to "
+                       f"{_enrollment_label(s.enrollment_id)}.")
+            raise ApiError(message, 422, {"section_id": message},
+                           code="SUBJECT_SECTION_MISMATCH",
+                           details={"subject_id": subject.id,
+                                    "section_id": s.id})
+        out.append(s)
+    return out
+
+
+def _lab_groups_for_subject(subject, lab_group_ids):
+    rows = {g.id: g for g in LabGroup.query.filter(
+        LabGroup.id.in_(lab_group_ids)).all()} if lab_group_ids else {}
+    out = []
+    for gid in lab_group_ids:
+        g = rows.get(gid)
+        if g is None or g.section is None:
+            raise ApiError("Lab group not found.", 404,
+                           {"lab_group_id": f"Lab group {gid} no longer exists."})
+        if g.section.enrollment_id != subject.enrollment_id:
+            message = (f"'{subject.name}' is a "
+                       f"{_enrollment_label(subject.enrollment_id)} subject, "
+                       f"but lab group {g.name} belongs to "
+                       f"{_enrollment_label(g.section.enrollment_id)}.")
+            raise ApiError(message, 422, {"lab_group_id": message},
+                           code="SUBJECT_SECTION_MISMATCH",
+                           details={"subject_id": subject.id,
+                                    "lab_group_id": g.id})
+        out.append(g)
+    return out
+
+
+def _id_list(data, field):
+    raw = data.get(field)
+    if raw in (None, ""):
+        return []
+    if not isinstance(raw, (list, tuple)):
+        raw = [raw]
+    out = []
+    for item in raw:
+        try:
+            value = int(item)
+        except (TypeError, ValueError):
+            raise ApiError("Invalid input.", 422,
+                           {field: "Must be a list of ids."})
+        if value not in out:
+            out.append(value)
+    return out
+
+
+@api_bp.route("/assignments/bulk", methods=["POST"])
+@login_required
+def api_assignment_bulk_create():
+    """Assign one teacher + subject to many sections (or lab groups) at once.
+
+    Payload: {faculty_id, subject_id, session_type, periods_per_week,
+    block_length, section_ids: [...] (theory) | lab_group_ids: [...]
+    (practical)}. All-or-nothing: every target is validated first (it
+    must exist, belong to the subject's class/year, and not already have
+    this subject of this type), then all assignments are created in one
+    transaction.
+    """
+    data = _data()
+    session_type = _session_type_field(data)
+    faculty_id = _required_int(data, "faculty_id")
+    periods_per_week, block_length = _hours_fields(data)
+    fac = Faculty.query.get(faculty_id)
+    if not fac:
+        raise ApiError("Faculty not found.", 404,
+                       {"faculty_id": "This teacher no longer exists."})
+    subject = _subject_for_assignment(_required_int(data, "subject_id"))
+
+    if session_type == "theory":
+        ids = _id_list(data, "section_ids")
+        if not ids:
+            message = "Tick at least one section."
+            raise ApiError(message, 422, {"section_ids": message})
+        targets = _sections_for_subject(subject, ids)
+        existing = TeachingAssignment.query.filter(
+            TeachingAssignment.subject_id == subject.id,
+            TeachingAssignment.session_type == "theory",
+            TeachingAssignment.section_id.in_(ids)).all()
+        taken = {a.section_id: a for a in existing}
+        field_name = "section_ids"
+    else:
+        ids = _id_list(data, "lab_group_ids")
+        if not ids:
+            message = "Tick at least one lab group."
+            raise ApiError(message, 422, {"lab_group_ids": message})
+        targets = _lab_groups_for_subject(subject, ids)
+        existing = TeachingAssignment.query.filter(
+            TeachingAssignment.subject_id == subject.id,
+            TeachingAssignment.session_type == "practical",
+            TeachingAssignment.lab_group_id.in_(ids)).all()
+        taken = {a.lab_group_id: a for a in existing}
+        field_name = "lab_group_ids"
+
+    clashes = [t for t in targets if t.id in taken]
+    if clashes:
+        parts = [f"{t.name} (already taught by "
+                 f"{taken[t.id].faculty.name if taken[t.id].faculty else '?'})"
+                 for t in clashes]
+        message = (f"'{subject.name}' "
+                   f"{'theory' if session_type == 'theory' else 'lab'} is "
+                   f"already assigned for " + ", ".join(parts) +
+                   ". Untick those, or use Reassign to change the teacher.")
+        raise ApiError(message, 422, {field_name: message},
+                       code="DUPLICATE_ASSIGNMENT",
+                       details={"target_ids": [t.id for t in clashes]},
+                       failures=[{"code": "DUPLICATE_ASSIGNMENT",
+                                  "message": p, "details": {}}
+                                 for p in parts])
+
+    prior_total = db.session.query(
+        func.coalesce(func.sum(TeachingAssignment.periods_per_week), 0)
+    ).filter_by(faculty_id=faculty_id).scalar()
+    created = []
+    try:
+        for t in targets:
+            a = TeachingAssignment(
+                faculty_id=faculty_id, subject_id=subject.id,
+                session_type=session_type,
+                section_id=t.id if session_type == "theory" else None,
+                lab_group_id=t.id if session_type == "practical" else None,
+                periods_per_week=periods_per_week, block_length=block_length)
+            db.session.add(a)
+            created.append(a)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        raise ApiError("Could not save the assignments. Nothing was changed.",
+                       500, code=error_contract.INTERNAL_ERROR)
+
+    added = periods_per_week * len(created)
+    new_total = prior_total + added
+    n = len(created)
+    message = (f"{fac.name} now teaches {subject.name} "
+               f"({'theory' if session_type == 'theory' else 'lab'}) to "
+               f"{n} {'section' if session_type == 'theory' else 'lab group'}"
+               f"{'s' if n != 1 else ''}: "
+               + ", ".join(t.name for t in targets)
+               + f". Weekly load {prior_total} → {new_total} hrs.")
+    category = "success"
+    if fac.weekly_max_hours and new_total > fac.weekly_max_hours:
+        message += (f" ⚠ This exceeds their configured max of "
+                    f"{fac.weekly_max_hours} hrs/week.")
+        category = "warning"
+    return jsonify({"ok": True, "message": message, "category": category,
+                    "created": len(created),
+                    "assignments": [{"id": a.id, "group": a.group_label()}
+                                    for a in created],
+                    "faculty_load": {"before": prior_total,
+                                     "after": new_total}}), 201
+
+
 @api_bp.route("/assignments/<int:aid>/delete", methods=["POST"])
 @login_required
 def api_assignment_delete(aid):
     a = TeachingAssignment.query.get(aid)
     if not a:
         raise ApiError("Assignment not found.", 404)
-    db.session.delete(a)
-    db.session.commit()
-    return jsonify({"ok": True, "message": "Assignment deleted."})
+    report = _run_delete(deletion.delete_assignment, a)
+    return jsonify({"ok": True,
+                    "message": _deleted_message("Assignment", report),
+                    "removed": report.counts})
 
 
 # -------------------------------------- faculty reassignment/swap (6H)
@@ -1338,14 +1681,70 @@ def api_import_workload():
 @api_bp.route("/schedule/run", methods=["POST"])
 @login_required
 def api_schedule_run():
+    # One generation at a time: a second click (or a second admin) while a
+    # solve is running gets a clear 409 instead of racing the first run.
+    from backend import solver_runner
+    try:
+        solver_runner.acquire_generation_slot()
+    except solver_runner.GenerationBusy:
+        raise ApiError("A timetable is already being generated. Wait for it "
+                       "to finish, then try again.", 409,
+                       code="GENERATION_IN_PROGRESS")
+    try:
+        return _schedule_run_locked()
+    finally:
+        solver_runner.release_generation_slot()
+
+
+def _solver_inputs_ok(assignments):
+    """Split assignments into schedulable ones and problems.
+
+    Returns (usable_assignments, problems). Rows whose teacher, subject or
+    group no longer exists (left by old bare deletes; the startup cleanup
+    removes them) are skipped, since they are invisible in the UI and must
+    not be scheduled. Rows with impossible hours are returned as problems,
+    which block the run with a precise message instead of crashing the
+    solver.
+    """
+    usable, problems = [], []
+    for a in assignments:
+        label = (f"{a.faculty.name if a.faculty else '?'} — "
+                 f"{a.subject.name if a.subject else '?'} ({a.group_label()})")
+        if a.faculty is None or a.subject is None:
+            continue
+        if a.specialization_id is None:
+            if a.session_type == "practical" and a.lab_group is None:
+                continue
+            if a.session_type != "practical" and a.section is None:
+                continue
+        ppw, blk = a.periods_per_week or 0, a.block_length or 0
+        if ppw < 1 or blk < 1 or blk > ppw:
+            problems.append(f"{label}: {ppw} hrs/week with blocks of {blk} "
+                            f"is not valid.")
+            continue
+        usable.append(a)
+    return usable, problems
+
+
+def _schedule_run_locked():
     # Invokes the EXISTING scheduler with the EXACT same inputs the Jinja
     # route uses (same time limit, same persistence semantics).
     # Phase 6E: locked interdepartment blocks enter the solver as fixed
     # pre-solve occupancy (never moved); on SUCCESS only non-locked rows
     # are replaced, on FAILURE the previous schedule is preserved untouched.
     cfg = _get_config()
-    assignments = TeachingAssignment.query.all()
-    rooms = Room.query.all()
+    assignments, input_problems = _solver_inputs_ok(
+        TeachingAssignment.query.order_by(TeachingAssignment.id).all())
+    if input_problems:
+        message = ("Some teaching assignments have invalid hours. Fix them "
+                   "on the Assignments page, then generate again: "
+                   + " ".join(input_problems[:5]))
+        raise ApiError(message, 422, code=error_contract.SCHEDULING_FAILED,
+                       details={"reason": message},
+                       failures=[{"code": "INVALID_ASSIGNMENT",
+                                  "message": p, "details": {}}
+                                 for p in input_problems[:50]])
+    rooms = Room.query.order_by(Room.id).all()
     faculty_unavail = {f.id: f.unavailable_set() for f in Faculty.query.all()}
     days = cfg.day_list()
     periods = cfg.period_list()
@@ -1394,16 +1793,47 @@ def api_schedule_run():
     except Exception:
         faculty_pref_rows = []
 
-    status, placements, message = run_scheduler(
-        assignments, rooms, faculty_unavail, days, len(periods),
-        cfg.break_after_periods if cfg.break_after_periods else None,
-        cfg.max_consecutive_teaching,
-        time_limit_seconds=30,
+    from flask import current_app
+    solver_kwargs = dict(
         locked_placements=locked_placements,
         specialization_data=specialization_data,
         preferred_theory_rooms=preferred_theory_rooms,
         faculty_preferences=faculty_pref_rows,
     )
+    break_after = cfg.break_after_periods if cfg.break_after_periods else None
+    time_limit = int(current_app.config.get("SOLVER_TIME_LIMIT", 30) or 30)
+    if current_app.config.get("SOLVER_ISOLATION"):
+        # Production path: solve in a child process so a native OR-Tools
+        # crash can never take the web server down (see solver_runner.py).
+        from backend import solver_runner
+        payload = solver_runner.build_payload(
+            assignments=assignments, rooms=rooms,
+            faculty_unavailable=faculty_unavail, days=days,
+            num_periods=len(periods), break_after=break_after,
+            max_consecutive=cfg.max_consecutive_teaching,
+            time_limit_seconds=time_limit, **solver_kwargs)
+        # The solve can take a while: don't hold the SQLite read
+        # transaction open meanwhile.
+        db.session.rollback()
+        try:
+            status, placements, message = solver_runner.run_isolated(payload)
+        except solver_runner.SolverCrashed as exc:
+            raise ApiError(exc.message, 500, code="SOLVER_CRASHED",
+                           details={"reason": "solver process failed",
+                                    "exit_code": exc.exit_code})
+        # Re-read the assignments in this session for the persistence step.
+        assignments = TeachingAssignment.query.order_by(
+            TeachingAssignment.id).all()
+        live_ids = {a.id for a in assignments}
+        if any(p["assignment_id"] not in live_ids for p in placements):
+            raise ApiError("Teaching assignments changed while the timetable "
+                           "was being generated. Generate again.", 409,
+                           code="GENERATION_STALE")
+    else:
+        status, placements, message = run_scheduler(
+            assignments, rooms, faculty_unavail, days, len(periods),
+            break_after, cfg.max_consecutive_teaching,
+            time_limit_seconds=time_limit, **solver_kwargs)
 
     if status in ("INFEASIBLE", "NO_SESSIONS", "UNKNOWN", "MODEL_INVALID"):
         # FAILURE: preserve the previous schedule — nothing is deleted or
