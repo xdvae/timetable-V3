@@ -33,7 +33,9 @@ The system models complex academic constraints — room capacities and equipment
 - [Verification & Automated Test Suite](#verification--automated-test-suite)
 - [Local Development & Deployment](#local-development--deployment)
 - [Environment Configuration](#environment-configuration)
+- [Deleting Data](#deleting-data)
 - [Production Safety & Release Hardening](#production-safety--release-hardening)
+- [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -242,6 +244,10 @@ The generation endpoint (`POST /api/schedule/run`) implements rigorous solver st
 | `INFEASIBLE` | `422 Unprocessable` | `{ok: false, code: "SCHEDULING_INFEASIBLE", details: {locked_block_ids: [...]}}` | Solver proved no schedule can satisfy all hard rules. **Previous schedule is preserved untouched.** |
 | `UNKNOWN` | `422 Unprocessable` | `{ok: false, code: "SCHEDULING_FAILED", details: {timeout: true, status: "UNKNOWN"}}` | Solver reached time limit without finding a solution. **Previous schedule is preserved untouched.** |
 | `MODEL_INVALID` | `500 Server Error` | `{ok: false, code: "INTERNAL_ERROR", details: {reason: "..."}}` | Model specification error. Internal diagnostics logged; safe message returned to user. |
+| *(solver process crashed / hung)* | `500 Server Error` | `{ok: false, code: "SOLVER_CRASHED", details: {exit_code: N}}` | OR-Tools died natively or stopped responding. The web server keeps running and the **previous schedule is preserved untouched**; the message says how to repair the solver install. |
+| *(a run is already in progress)* | `409 Conflict` | `{ok: false, code: "GENERATION_IN_PROGRESS"}` | Only one generation runs at a time per server process. |
+
+**Crash isolation.** In the running app, `POST /api/schedule/run` solves in a short-lived child process (`python -m backend.solver_worker`, see `backend/solver_runner.py`). A native OR-Tools crash therefore can no longer take the Flask/gunicorn process down (which used to surface in the browser as a bare `Request failed (502)` from the dev proxy). Set `SOLVER_ISOLATION=0` to solve in-process; `SOLVER_TIME_LIMIT` (seconds, default 30) sets the solver's time limit. Check the solver on its own with `python -m backend.solver_check`.
 
 ---
 
@@ -338,7 +344,7 @@ All application endpoints are prefixed with `/api` and require a valid session c
 | `GET` | `/api/config` | Read global configuration (working days, periods, break index, max consecutive teaching). |
 | `POST` | `/api/config` | Update global scheduling configuration. |
 | `GET` | `/api/rooms` | List all rooms (type, capacity, equipment count). |
-| `POST` | `/api/rooms` | Create a new room with capacity and equipment. |
+| `POST` | `/api/rooms` | Create a room. Send `block` (single letter A–Z, or blank) and `number` (digits only); stored canonically as `101-A`. The legacy free-text `name` field is still accepted. List rows include parsed `block` / `number`. |
 | `POST` | `/api/rooms/<id>/delete` | Delete a room. |
 
 ### Faculty & Availability
@@ -387,7 +393,8 @@ All application endpoints are prefixed with `/api` and require a valid session c
 | `POST` | `/api/subjects` | Create a new subject. |
 | `POST` | `/api/subjects/<id>/delete` | Delete a subject. |
 | `GET` | `/api/assignments` | List teaching assignments with faculty, subject, section/group, and periods. |
-| `POST` | `/api/assignments` | Create a teaching assignment. |
+| `POST` | `/api/assignments` | Create one teaching assignment (the section / lab group must belong to the subject's class/year). |
+| `POST` | `/api/assignments/bulk` | Assign one teacher + subject to many sections (`section_ids`) or lab groups (`lab_group_ids`) in one all-or-nothing request. Rejects groups from another class/year (`SUBJECT_SECTION_MISMATCH`) and groups that already have the subject (`DUPLICATE_ASSIGNMENT`). |
 | `POST` | `/api/assignments/<id>/delete` | Delete a teaching assignment. |
 | `POST` | `/api/assignments/<aid>/validate-reassign` | Dry-run check for faculty reassignment (`{faculty_id}`). |
 | `POST` | `/api/assignments/<aid>/reassign` | Atomically reassign faculty member on an assignment. |
@@ -544,7 +551,7 @@ Export endpoints produce standalone files formatted per timetable view (one sect
 
 The UniSchedule repository includes a comprehensive automated test suite covering all backend constraints, API contracts, solver objectives, and frontend integration behaviors:
 
-### Backend Pytest Suite (633 Tests)
+### Backend Pytest Suite (666 Tests)
 Located in `backend/tests/`:
 - `test_hn1.py`, `test_hn1_capacity.py` — High-workload consecutive theory limits and capacity rules
 - `test_scheduler_objective_6s.py` — Hierarchy of CP-SAT soft objective tiers and benchmarks
@@ -561,13 +568,14 @@ Located in `backend/tests/`:
 - `test_frontend_integration_contracts_6u.py` — End-to-end API contract testing for frontend
 - `test_production_safety_6v.py` — Production startup, SPA catch-all, and regression hardening
 - `test_audit_readonly.py` — Read-only verification tool validation
+- `test_v3_fixes.py` — Bulk assignments, cascading deletes + orphan repair, crash-isolated generation, room Block + number, config/CSV validation
 
 Run the backend test suite:
 ```bash
 pytest
 ```
 
-### Frontend Vitest Suite (162 Tests)
+### Frontend Vitest Suite (166 Tests)
 Located across `frontend/src/**/__tests__/`:
 - `sidebar-shadcn.test.jsx` — Responsive AppShell, sidebar collapse states, route matching
 - `universal-search.test.jsx` — Global search modal, keyboard shortcuts, navigation
@@ -576,6 +584,7 @@ Located across `frontend/src/**/__tests__/`:
 - `error-components-6q.test.jsx`, `errors-6q.test.js` — Safe error presentation and failure code handling
 - `propagation.test.js`, `invalidation.test.js` — Cross-surface event bus and cache invalidation
 - `cross-surface.test.jsx` — Multi-surface synchronization matrix
+- `bulk-assign.test.jsx` — Multi-section teacher assignment dialog (class filtering, locked duplicates, select-all, lab groups, load warning)
 
 Run the frontend test suite:
 ```bash
@@ -588,7 +597,7 @@ npm test
 ## Local Development & Deployment
 
 ### Prerequisites
-- Python 3.12+
+- 64-bit Python 3.10–3.14 (OR-Tools ships no 32-bit builds)
 - Node.js 18+ and npm
 
 ### 1. Backend Setup
@@ -651,10 +660,29 @@ Copy `.env.example` to `.env` in the repository root. Never commit `.env` or sen
 | Variable | Default | Purpose |
 | :--- | :--- | :--- |
 | `DATABASE_URL` | `sqlite:///timetable.db` | Database connection URI (`sqlite:///timetable.db` or PostgreSQL URI). |
-| `SECRET_KEY` | *(Generated on boot)* | Cryptographic key used to sign session cookies. **Must be fixed in production.** |
+| `SECRET_KEY` | *(Generated once, saved to `backend/instance/secret_key`)* | Key used to sign session cookies. If unset, one key is generated on first start and shared by every worker and restart (a per-process key logged users out at random under multiple gunicorn workers). Set it explicitly in production. |
+| `SOLVER_ISOLATION` | `1` | Run the OR-Tools solve in a child process so a native crash can't kill the server. `0` solves in-process. |
+| `SOLVER_TIME_LIMIT` | `30` | Solver time limit in seconds (minimum 5). |
 | `ADMIN_USERNAME` | `admin` | Initial administrator login username created on first run. |
 | `ADMIN_PASSWORD` | *(Generated on boot)* | Initial administrator login password. If unset, a random password is printed once to the console. |
 | `INSTITUTION_NAME` | `UniSchedule Demo` | Institutional title displayed on dashboard and session headers. |
+
+---
+
+## Deleting Data
+
+Every delete removes everything that only makes sense with the deleted record, in one transaction (`backend/deletion.py`), and the response says what went:
+
+| Delete | Also removes |
+| :--- | :--- |
+| Teacher | their teaching assignments, fixed blocks, preferences, and their classes in the current timetable |
+| Subject | its teaching assignments (and their timetable classes / fixed blocks) |
+| Enrollment (class/year) | its sections, lab groups, subjects, specializations, assignments and timetable classes |
+| Program | all of its enrollments, cascading as above |
+| Teaching assignment | its timetable classes and fixed blocks |
+| Room | timetable classes placed in it (regenerate to re-place them); clears sections' home-room preference. **Blocked (409 `DELETE_BLOCKED`) while a fixed block uses the room.** |
+
+Older versions deleted only the record itself and left "ghost" rows that still fed timetable generation. On startup the app removes any such leftovers once (`purge_orphans()`), and logs what it cleaned.
 
 ---
 
@@ -667,3 +695,21 @@ Following Phase 6V hardening, UniSchedule implements strict operational safety p
 3. **Audit Safety**: The standalone audit CLI (`python -m backend.audit_schedule`) strictly opens SQLite with `uri=True` and `mode=ro` preventing any schema creation or row mutation.
 4. **Session-Cookie Security**: The React frontend communicates strictly over same-origin requests using HTTP-only session cookies. No JWTs, access tokens, or credentials are stored in `localStorage` or `sessionStorage`.
 5. **Deterministic Diagnostics**: Solver infeasibility returns detailed conflict metadata (e.g. blocking locked block IDs) to administrators while preventing internal server crashes.
+
+---
+
+## Troubleshooting
+
+**"Scheduling failed — Request failed (502)" / "The backend server is not responding."**
+The browser could not get any answer from Flask: the backend process was not running, or it died during the request. With the Vite dev server, any request to a stopped backend comes back as an empty 502. Check the terminal running `python -m backend.app`.
+
+Generation now runs the solver in a separate process, so a solver crash shows a clear `SOLVER_CRASHED` message instead of killing the backend. If you see that message:
+
+1. Run `python -m backend.solver_check`. It solves a tiny timetable exactly the way the app does and prints `Solver OK` or the failure.
+2. On Windows, install the latest **64-bit Microsoft Visual C++ Redistributable (2015–2022)** and use 64-bit Python.
+3. Reinstall the pinned solver: `pip install --force-reinstall --no-cache-dir -r backend/requirements.txt`.
+
+**"A timetable is already being generated."** Another generation is still running (for example a second click or a second browser tab). Wait for it to finish.
+
+**Downloads (Excel/CSV/print) open the app instead of a file in development.** Restart `npm run dev` so the updated `vite.config.js` proxies `/export` and `/import/sample` to Flask.
+
